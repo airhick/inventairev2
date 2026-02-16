@@ -49,3 +49,13 @@ desktop.ini
 
 .env
 
+# Images produits (réimportées en prod)
+public/images/items/
+data/images/
+
+# Config IDE Claude
+.claude/
+
+# Dossier de préparation déploiement
+deployment_prep/
+
