@@ -1,0 +1,21 @@
+{
+  "/_not-found/page": "app/_not-found/page.js",
+  "/api/items/route": "app/api/items/route.js",
+  "/api/pdf/route": "app/api/pdf/route.js",
+  "/api/upload/route": "app/api/upload/route.js",
+  "/api/items/[id]/route": "app/api/items/[id]/route.js",
+  "/api/scan/route": "app/api/scan/route.js",
+  "/login/page": "app/login/page.js",
+  "/minimal/page": "app/minimal/page.js",
+  "/page": "app/page.js",
+  "/admin/data-tables/page": "app/admin/data-tables/page.js",
+  "/admin/gallery/page": "app/admin/gallery/page.js",
+  "/admin/location/page": "app/admin/location/page.js",
+  "/admin/default/page": "app/admin/default/page.js",
+  "/admin/voice-command/page": "app/admin/voice-command/page.js",
+  "/admin/profile/page": "app/admin/profile/page.js",
+  "/admin/nft-marketplace/page": "app/admin/nft-marketplace/page.js",
+  "/admin/scanner/page": "app/admin/scanner/page.js",
+  "/admin/inventory/page": "app/admin/inventory/page.js",
+  "/rtl/rtl-default/page": "app/rtl/rtl-default/page.js"
+}

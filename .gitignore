@@ -1,6 +1,7 @@
 # Node / Next.js (frontend à la racine)
 node_modules/
-.next/
+# .next/ (on garde le build pour déploiement, mais pas le cache)
+.next/cache/
 out/
 # .env.local
 .env*.local
