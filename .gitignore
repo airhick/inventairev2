@@ -46,3 +46,6 @@ desktop.ini
 .cache/
 .parcel-cache/
 .turbo/
+
+.env
+
