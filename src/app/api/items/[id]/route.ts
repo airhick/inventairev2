@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { query } from '@/lib/db';
+
+const PHP_API_URL = 'https://api.globalvision.ch/api/api.php';
 
 export async function GET(
     request: NextRequest,
@@ -7,12 +8,30 @@ export async function GET(
 ) {
     const id = params.id;
     try {
-        const items: any = await query('SELECT * FROM items WHERE id = ?', [id]);
-        if (items.length === 0) {
+        const response = await fetch(PHP_API_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'fetch_item', id }),
+        });
+
+        if (!response.ok) {
+            // If PHP script returns 500 or 404
+            return NextResponse.json({ error: 'Item not found or API error' }, { status: 404 });
+        }
+
+        const item = await response.json();
+
+        if (!item) {
             return NextResponse.json({ error: 'Item not found' }, { status: 404 });
         }
-        return NextResponse.json(items[0]);
+
+        return NextResponse.json(item, {
+            headers: {
+                'Cache-Control': 'public, s-maxage=60, stale-while-revalidate=30'
+            }
+        });
     } catch (error: any) {
+        console.error('API Error:', error);
         return NextResponse.json({ error: error.message }, { status: 500 });
     }
 }
@@ -24,29 +43,35 @@ export async function PUT(
     const id = params.id;
     try {
         const body = await request.json();
-        // Simplified update logic - update all fields or specific ones
-        // We should build dynamic query based on body keys
 
-        const keys = Object.keys(body).filter(k => k !== 'id');
-        if (keys.length === 0) {
+        // Filter out ID from body if present
+        const { id: _, ...updateData } = body;
+
+        if (Object.keys(updateData).length === 0) {
             return NextResponse.json({ message: 'No fields to update' });
         }
 
-        const setClause = keys.map(k => `${k} = ?`).join(', ');
-        const values = keys.map(k => {
-            const val = body[k];
-            if (typeof val === 'object' && val !== null) return JSON.stringify(val);
-            return val;
+        // Add last_updated
+        updateData.last_updated = new Date().toISOString().slice(0, 19).replace('T', ' ');
+
+        const response = await fetch(PHP_API_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                action: 'update_item',
+                id,
+                data: updateData
+            }),
         });
 
-        // Add last_updated
-        const now = new Date().toISOString();
+        if (!response.ok) {
+            throw new Error(`PHP API error: ${response.statusText}`);
+        }
 
-        const sql = `UPDATE items SET ${setClause}, last_updated = ? WHERE id = ?`;
-        await query(sql, [...values, now, id]);
-
-        return NextResponse.json({ success: true, message: 'Item updated' });
+        const result = await response.json();
+        return NextResponse.json(result);
     } catch (error: any) {
+        console.error('API Error:', error);
         return NextResponse.json({ error: error.message }, { status: 500 });
     }
 }
@@ -57,9 +82,19 @@ export async function DELETE(
 ) {
     const id = params.id;
     try {
-        await query('DELETE FROM items WHERE id = ?', [id]);
+        const response = await fetch(PHP_API_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'delete_item', id }),
+        });
+
+        if (!response.ok) {
+            throw new Error(`PHP API error: ${response.statusText}`);
+        }
+
         return NextResponse.json({ success: true, message: 'Item deleted' });
     } catch (error: any) {
+        console.error('API Error:', error);
         return NextResponse.json({ error: error.message }, { status: 500 });
     }
 }
