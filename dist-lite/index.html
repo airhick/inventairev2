@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Code Bar CRM Lite</title>
+    <script type="module" crossorigin src="./assets/index-CQSXEHtA.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-mILjdvpx.css">
+  </head>
+  <body>
+    <main class="app">
+      <header class="header">
+        <h1>Code Bar CRM Lite</h1>
+        <p>Frontend leger connecte a Firebase RTDB</p>
+      </header>
+
+      <section class="card">
+        <h2>Ajouter un item</h2>
+        <form id="item-form" class="form">
+          <input id="serialNumber" placeholder="Serial number" required />
+          <input id="name" placeholder="Nom item" required />
+          <input id="brand" placeholder="Marque (optionnel)" />
+          <input id="model" placeholder="Modele (optionnel)" />
+          <select id="category"></select>
+          <input id="quantity" type="number" min="1" value="1" required />
+          <select id="status">
+            <option value="en_stock">En stock</option>
+            <option value="out">Out</option>
+            <option value="plus_dispo">Plus dispo</option>
+          </select>
+          <button type="submit">Enregistrer</button>
+        </form>
+      </section>
+
+      <section class="card">
+        <div class="row">
+          <h2>Items</h2>
+          <button id="refresh-btn" type="button">Refresh</button>
+        </div>
+        <input id="search" placeholder="Rechercher (nom/serial/marque/modele)" />
+        <div id="status-line" class="status-line"></div>
+        <div id="items" class="items"></div>
+      </section>
+    </main>
+
+  </body>
+</html>

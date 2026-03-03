@@ -52,7 +52,7 @@ import {
 } from '@chakra-ui/react';
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
-import { MdSearch, MdEdit, MdDelete, MdDownload, MdUpload, MdAdd, MdMoreVert, MdFileUpload, MdCheckCircle, MdWarning, MdBrush, MdChevronLeft, MdChevronRight, MdPhotoLibrary, MdViewColumn, MdClose, MdDragIndicator, MdDeleteSweep, MdAccountTree, MdArrowUpward, MdArrowDownward, MdSort } from 'react-icons/md';
+import { MdSearch, MdEdit, MdDelete, MdDownload, MdUpload, MdAdd, MdMoreVert, MdFileUpload, MdCheckCircle, MdWarning, MdBrush, MdChevronLeft, MdChevronRight, MdPhotoLibrary, MdViewColumn, MdClose, MdDragIndicator, MdDeleteSweep, MdAccountTree, MdArrowUpward, MdArrowDownward, MdSort, MdAutoFixHigh, MdSubdirectoryArrowRight } from 'react-icons/md';
 import Card from 'components/card/Card';
 import {
   getItems,
@@ -62,6 +62,7 @@ import {
   getCategories,
   getCustomFields,
   saveItem,
+  reorderItemHierarchy,
   Item,
   CustomField,
   getSSEUrl,
@@ -70,7 +71,9 @@ import {
   updateCustomField,
   createCategory,
   deleteCategory,
+  getItemImageFromNode,
 } from 'lib/api';
+import { getImageFromCache, saveImageToCache } from 'lib/imageCache';
 import { ColumnManager } from 'components/table/ColumnManager';
 import { AdvancedFilters, FilterRule, SortRule } from 'components/table/AdvancedFilters';
 import { applyFiltersAndSorts } from 'utils/filterUtils';
@@ -122,6 +125,119 @@ const FIELD_TYPE_LABELS: Record<string, string> = {
   email: 'Email',
 };
 
+// --- Composant Image Asynchrone (Cache Local IndexedDB) ---
+const AsyncImage = ({ item, onClick }: { item: Item; onClick: (images: string[]) => void }) => {
+  const [images, setImages] = useState<string[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const parseImages = (raw: string | string[]): string[] => {
+    if (!raw) return [];
+    if (Array.isArray(raw)) return raw;
+    if (typeof raw === 'string') {
+      if (raw.startsWith('[') && raw.endsWith(']')) {
+        try {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) return parsed;
+        } catch { /* ignore */ }
+      }
+      return [raw];
+    }
+    return [];
+  };
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const fetchImage = async () => {
+      // 1. Lire depuis firebase inline (si encore présent, ex: pas migré ou URL externe)
+      if (item.image && item.image.length > 0) {
+        if (isMounted) { setImages(parseImages(item.image)); setLoading(false); }
+        return;
+      }
+
+      // Si on sait qu'il n'y a pas d'image
+      if (!item.hasImage) {
+        if (isMounted) setLoading(false);
+        return;
+      }
+
+      // 2. Chercher dans IndexedDB
+      const cached = await getImageFromCache(item.serialNumber);
+      if (cached && cached.timestamp >= (item.imageTimestamp || 0)) {
+        if (isMounted) { setImages(parseImages(cached.base64)); setLoading(false); }
+        return;
+      }
+
+      // 3. Télécharger depuis Firebase
+      try {
+        const base64 = await getItemImageFromNode(item.serialNumber);
+        if (base64) {
+          await saveImageToCache(item.serialNumber, base64, item.imageTimestamp || Date.now());
+          if (isMounted) setImages(parseImages(base64));
+        }
+      } catch (err) {
+        console.error('[AsyncImage] Erreur de chargement:', err);
+      }
+
+      if (isMounted) setLoading(false);
+    };
+
+    fetchImage();
+
+    return () => { isMounted = false; };
+  }, [item.serialNumber, item.image, item.hasImage, item.imageTimestamp]);
+
+  if (loading) {
+    return (
+      <Box w="40px" h="40px" borderRadius="md" bg="gray.200" display="flex" alignItems="center" justifyContent="center">
+        <Text fontSize="xx-small" color="gray.500">...</Text>
+      </Box>
+    );
+  }
+
+  if (images.length > 0) {
+    return (
+      <HStack spacing={1} flexWrap="wrap" align="flex-start" maxW="220px">
+        {images.map((imgSrc, idx) => (
+          <Box
+            key={idx}
+            position="relative"
+            w="40px"
+            h="40px"
+            borderRadius="md"
+            overflow="hidden"
+            border="1px solid"
+            borderColor="gray.200"
+            cursor="pointer"
+            onClick={() => onClick(images)}
+            _hover={{ transform: 'scale(1.05)', borderColor: 'blue.400', boxShadow: 'md' }}
+            transition="all 0.2s"
+          >
+            <Image src={imgSrc} alt={`${item.name} - ${idx + 1}`} w="100%" h="100%" objectFit="cover" />
+            {images.length > 1 && (
+              <Badge
+                position="absolute"
+                top="2px"
+                right="2px"
+                fontSize="xx-small"
+                colorScheme="blue"
+              >
+                {idx + 1}/{images.length}
+              </Badge>
+            )}
+          </Box>
+        ))}
+      </HStack>
+    );
+  }
+
+  return (
+    <Box w="40px" h="40px" borderRadius="md" bg="gray.100" display="flex" alignItems="center" justifyContent="center">
+      <Icon as={MdPhotoLibrary} color="gray.400" />
+    </Box>
+  );
+};
+
 export default function InventoryPage() {
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -139,11 +255,11 @@ export default function InventoryPage() {
     isCustom?: boolean;
   } | null>(null);
   const [editValue, setEditValue] = useState('');
-  
+
   // Colonnes personnalisées
   const [customFields, setCustomFields] = useState<CustomField[]>([]);
   const { isOpen: isImportOpen, onOpen: onImportOpen, onClose: onImportClose } = useDisclosure();
-  
+
   // Import CSV
   const fileInputRef = useRef<HTMLInputElement>(null);
   const csvParsedRef = useRef<{ headers: string[]; data: string[][]; mapping: Record<string, string> } | null>(null);
@@ -155,12 +271,13 @@ export default function InventoryPage() {
   const [importProgress, setImportProgress] = useState({ current: 0, total: 0, errors: 0 });
   const [draggedCsvColumn, setDraggedCsvColumn] = useState<string | null>(null);
   const [draggedInventoryColumn, setDraggedInventoryColumn] = useState<string | null>(null);
-  
+
   // Modal pour voir toutes les images en grand
   const { isOpen: isImageModalOpen, onOpen: onImageModalOpen, onClose: onImageModalClose } = useDisclosure();
   const [selectedItemImages, setSelectedItemImages] = useState<string[]>([]);
   const [selectedImageIndex, setSelectedImageIndex] = useState(0);
-  
+  const [selectedSerialNumbers, setSelectedSerialNumbers] = useState<string[]>([]);
+
   // Modal pour gérer les colonnes personnalisées
   const { isOpen: isColumnModalOpen, onOpen: onColumnModalOpen, onClose: onColumnModalClose } = useDisclosure();
   const [newColumnName, setNewColumnName] = useState('');
@@ -225,7 +342,7 @@ export default function InventoryPage() {
       return prevItems.map(item => updatedMap.get(item.id) || item);
     });
   }, []);
-  
+
   const hierarchy = useItemHierarchy(filteredItems, handleHierarchyItemsChange);
 
   // Statuts personnalisés (liste déroulante colonne Statut)
@@ -242,7 +359,7 @@ export default function InventoryPage() {
   useEffect(() => {
     try {
       localStorage.setItem(CUSTOM_STATUSES_STORAGE_KEY, JSON.stringify(customStatuses));
-    } catch {}
+    } catch { }
   }, [customStatuses]);
 
   // Liste complète des options de statut (défaut + personnalisés)
@@ -276,7 +393,7 @@ export default function InventoryPage() {
   const toast = useToast();
   const bg = useColorModeValue('white', 'navy.800');
   const textColor = useColorModeValue('secondaryGray.900', 'white');
-  
+
 
 
   // Test au montage du composant
@@ -370,20 +487,24 @@ export default function InventoryPage() {
     loadItems();
     loadCategories();
     loadCustomFields();
-    
+    if (!SSE_URL) {
+      setIsSSEConnected(false);
+      return;
+    }
+
     // Écouter les événements SSE pour recharger uniquement lors de changements
     let eventSource: EventSource | null = null;
     let reconnectTimeout: NodeJS.Timeout | null = null;
     let reconnectAttempts = 0;
     const maxReconnectAttempts = 5;
-    
+
     const connectSSE = () => {
       if (eventSource) {
         eventSource.close();
       }
-      
+
       eventSource = new EventSource(SSE_URL);
-      
+
       eventSource.onopen = () => {
         console.log('[SSE] ✅ Connecté aux événements temps réel');
         console.log('[SSE] URL:', SSE_URL);
@@ -391,12 +512,12 @@ export default function InventoryPage() {
         setIsSSEConnected(true);
         setLastSyncTime(new Date());
       };
-      
+
       eventSource.onerror = () => {
         console.error('[SSE] ❌ Erreur de connexion, tentative de reconnexion...');
         eventSource?.close();
         setIsSSEConnected(false);
-        
+
         if (reconnectAttempts < maxReconnectAttempts) {
           reconnectAttempts++;
           const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
@@ -406,7 +527,7 @@ export default function InventoryPage() {
           console.error('[SSE] ❌ Échec de reconnexion après', maxReconnectAttempts, 'tentatives');
         }
       };
-      
+
       eventSource.addEventListener('items_changed', (e) => {
         console.log('[SSE] 📦 Événement items_changed reçu:', e);
         try {
@@ -424,14 +545,14 @@ export default function InventoryPage() {
         setLastSyncTime(new Date());
         loadItems();
       });
-      
+
       eventSource.addEventListener('categories_changed', (e) => {
         console.log('[SSE] 📁 Événement categories_changed reçu:', e);
         console.log('[SSE] Rechargement automatique des catégories...');
         setLastSyncTime(new Date());
         loadCategories();
       });
-      
+
       eventSource.addEventListener('custom_fields_changed', (e) => {
         console.log('[SSE] 📊 Événement custom_fields_changed reçu:', e);
         console.log('[SSE] Rechargement automatique des colonnes personnalisées et items...');
@@ -440,9 +561,9 @@ export default function InventoryPage() {
         loadItems(); // Recharger aussi les items car ils contiennent les données custom
       });
     };
-    
+
     connectSSE();
-    
+
     return () => {
       eventSource?.close();
       if (reconnectTimeout) clearTimeout(reconnectTimeout);
@@ -452,23 +573,23 @@ export default function InventoryPage() {
   // Navigation clavier dans le modal d'images
   useEffect(() => {
     if (!isImageModalOpen || selectedItemImages.length <= 1) return;
-    
+
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'ArrowLeft') {
         e.preventDefault();
-        const newIndex = selectedImageIndex > 0 
-          ? selectedImageIndex - 1 
+        const newIndex = selectedImageIndex > 0
+          ? selectedImageIndex - 1
           : selectedItemImages.length - 1;
         setSelectedImageIndex(newIndex);
       } else if (e.key === 'ArrowRight') {
         e.preventDefault();
-        const newIndex = selectedImageIndex < selectedItemImages.length - 1 
-          ? selectedImageIndex + 1 
+        const newIndex = selectedImageIndex < selectedItemImages.length - 1
+          ? selectedImageIndex + 1
           : 0;
         setSelectedImageIndex(newIndex);
       }
     };
-    
+
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isImageModalOpen, selectedItemImages.length, selectedImageIndex]);
@@ -481,13 +602,13 @@ export default function InventoryPage() {
       const targetItem = items.find(
         item => item.hexId === decoded || item.serialNumber === decoded
       );
-      
+
       if (targetItem) {
         // Filtrer pour afficher l'item (par n° de série pour le scroll)
         setSearchTerm(targetItem.serialNumber);
         setCategoryFilter('');
         setCurrentPage(1);
-        
+
         // Scroller vers l'item après un court délai (l'élément a id item-{serialNumber})
         const serialForDom = targetItem.serialNumber;
         setTimeout(() => {
@@ -500,7 +621,7 @@ export default function InventoryPage() {
             }, 2000);
           }
         }, 300);
-        
+
         // Nettoyer l'URL
         router.replace('/admin/inventory');
       }
@@ -512,7 +633,7 @@ export default function InventoryPage() {
 
   // Fonction pour vérifier si un item correspond à la recherche
   const itemMatchesSearch = (item: Item, term: string): boolean => {
-    const standardFieldsMatch = 
+    const standardFieldsMatch =
       item.name?.toLowerCase().includes(term) ||
       item.barcode?.toLowerCase().includes(term) ||
       item.scannedCode?.toLowerCase().includes(term) ||
@@ -527,9 +648,9 @@ export default function InventoryPage() {
       item.status?.toLowerCase().includes(term) ||
       item.itemType?.toLowerCase().includes(term) ||
       String(item.quantity || '').includes(term);
-    
+
     if (standardFieldsMatch) return true;
-    
+
     if (item.customData) {
       const customDataMatch = Object.values(item.customData).some(value => {
         if (value === null || value === undefined) return false;
@@ -537,7 +658,7 @@ export default function InventoryPage() {
       });
       if (customDataMatch) return true;
     }
-    
+
     return false;
   };
 
@@ -548,7 +669,7 @@ export default function InventoryPage() {
 
     if (searchTerm) {
       const term = searchTerm.toLowerCase().trim();
-      
+
       // Trouver tous les items qui correspondent
       items.forEach(item => {
         if (itemMatchesSearch(item, term) && item.id) {
@@ -567,7 +688,7 @@ export default function InventoryPage() {
       });
 
       // Filtrer: garder les items qui correspondent OU leurs parents
-      filtered = filtered.filter(item => 
+      filtered = filtered.filter(item =>
         (item.id && matched.has(item.id)) || (item.id && parentsToInclude.has(item.id))
       );
     }
@@ -592,6 +713,37 @@ export default function InventoryPage() {
   const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
   const endIndex = startIndex + ITEMS_PER_PAGE;
   const paginatedItems = itemsToDisplay.slice(startIndex, endIndex);
+  const pageSerialNumbers = paginatedItems
+    .map((item) => item.serialNumber)
+    .filter((serial): serial is string => !!serial);
+  const selectedOnPageCount = pageSerialNumbers.filter((serial) => selectedSerialNumbers.includes(serial)).length;
+  const allSelectedOnPage = pageSerialNumbers.length > 0 && selectedOnPageCount === pageSerialNumbers.length;
+  const someSelectedOnPage = selectedOnPageCount > 0 && !allSelectedOnPage;
+
+  useEffect(() => {
+    const validSerials = new Set(items.map((item) => item.serialNumber).filter(Boolean));
+    setSelectedSerialNumbers((prev) => prev.filter((serial) => validSerials.has(serial)));
+  }, [items]);
+
+  const toggleItemSelection = (serialNumber: string, checked: boolean) => {
+    setSelectedSerialNumbers((prev) => {
+      if (checked) {
+        if (prev.includes(serialNumber)) return prev;
+        return [...prev, serialNumber];
+      }
+      return prev.filter((serial) => serial !== serialNumber);
+    });
+  };
+
+  const toggleSelectAllOnPage = (checked: boolean) => {
+    setSelectedSerialNumbers((prev) => {
+      if (checked) {
+        return Array.from(new Set([...prev, ...pageSerialNumbers]));
+      }
+      const pageSet = new Set(pageSerialNumbers);
+      return prev.filter((serial) => !pageSet.has(serial));
+    });
+  };
 
   // Démarrer l'édition
   const startEdit = (serialNumber: string, field: string, currentValue: any, isCustom = false) => {
@@ -620,7 +772,7 @@ export default function InventoryPage() {
       } else {
         // Mise à jour d'un champ standard
         let valueToSave: any = editValue;
-        
+
         // Convertir en nombre si c'est le champ quantity
         if (editingCell.field === 'quantity') {
           valueToSave = parseInt(editValue) || 0;
@@ -635,30 +787,30 @@ export default function InventoryPage() {
           // Si on édite barcode, on met à jour scannedCode
           valueToSave = editValue.trim();
         }
-        
+
         // Mapping des champs pour l'API
         const apiFieldMap: Record<string, string> = {
           'barcode': 'scannedCode', // barcode est mappé vers scannedCode dans l'API
         };
-        
+
         const apiField = apiFieldMap[editingCell.field] || editingCell.field;
-        
+
         await updateItem(editingCell.serialNumber, {
           [apiField]: valueToSave,
         });
       }
-      
+
       console.log('[EDIT] ✅ Mise à jour réussie, rechargement immédiat de l\'affichage...');
-      
+
       // Fermer l'édition
       setEditingCell(null);
-      
+
       // Recharger immédiatement les données pour voir le changement
       // (le SSE propagera aux autres clients)
       await loadItems();
-      
+
       console.log('[EDIT] ✅ Affichage mis à jour!');
-      
+
       toast({
         title: '✅ Sauvegardé',
         description: 'Les modifications sont visibles immédiatement',
@@ -685,14 +837,14 @@ export default function InventoryPage() {
     try {
       console.log('[DELETE] 🗑️ Suppression de l\'item:', serialNumber);
       await deleteItem(serialNumber);
-      
+
       console.log('[DELETE] ✅ Suppression réussie, rechargement immédiat...');
-      
+
       // Recharger immédiatement les données
       await loadItems();
-      
+
       console.log('[DELETE] ✅ Affichage mis à jour!');
-      
+
       toast({
         title: 'Succès',
         description: 'Item supprimé',
@@ -716,17 +868,17 @@ export default function InventoryPage() {
   const handleDeleteAll = async () => {
     try {
       console.log('[DELETE_ALL] 🗑️ Suppression de tous les items...');
-      
+
       // Appeler l'endpoint de suppression en masse
       const result = await deleteAllItems();
-      
+
       console.log('[DELETE_ALL] ✅ Tous les items supprimés, rechargement...');
-      
+
       // Recharger immédiatement les données
       await loadItems();
-      
+
       console.log('[DELETE_ALL] ✅ Inventaire vidé!');
-      
+
       toast({
         title: 'Inventaire vidé',
         description: `${result.count} article(s) supprimé(s)`,
@@ -746,21 +898,60 @@ export default function InventoryPage() {
     }
   };
 
+  const handleDeleteSelected = async () => {
+    if (selectedSerialNumbers.length === 0) return;
+    if (!confirm(`Supprimer ${selectedSerialNumbers.length} item(s) selectionne(s) ?`)) return;
+
+    try {
+      let success = 0;
+      let errors = 0;
+
+      for (const serialNumber of selectedSerialNumbers) {
+        try {
+          await deleteItem(serialNumber);
+          success++;
+        } catch {
+          errors++;
+        }
+      }
+
+      await loadItems();
+      setSelectedSerialNumbers([]);
+
+      toast({
+        title: 'Suppression lot',
+        description: `${success} supprime(s)${errors > 0 ? `, ${errors} erreur(s)` : ''}`,
+        status: errors > 0 ? 'warning' : 'success',
+        duration: 3000,
+        isClosable: true,
+      });
+    } catch (error) {
+      console.error('Erreur suppression lot:', error);
+      toast({
+        title: 'Erreur',
+        description: 'Erreur lors de la suppression lot',
+        status: 'error',
+        duration: 3000,
+        isClosable: true,
+      });
+    }
+  };
+
   // Fonction pour échapper une valeur CSV selon RFC 4180 (adaptée pour point-virgule)
   const escapeCSVValue = (value: any): string => {
     if (value === null || value === undefined) {
       return '';
     }
-    
+
     // Convertir en string
     const str = String(value);
-    
+
     // Si la valeur contient des points-virgules, guillemets ou retours à la ligne, elle doit être entourée de guillemets
     if (str.includes(';') || str.includes('"') || str.includes('\n') || str.includes('\r') || str.includes(',')) {
       // Échapper les guillemets en les doublant
       return `"${str.replace(/"/g, '""')}"`;
     }
-    
+
     return str;
   };
 
@@ -798,20 +989,20 @@ export default function InventoryPage() {
       headers.map(escapeCSVValue).join(';'), // Point-virgule pour Excel français
       ...rows.map((row) => row.map(escapeCSVValue).join(';')),
     ];
-    
+
     const csvContent = csvRows.join('\r\n'); // Utiliser \r\n pour compatibilité Windows/Excel
-    
+
     // Ajouter BOM UTF-8 pour une meilleure compatibilité avec Excel
     const BOM = '\uFEFF';
     const blob = new Blob([BOM + csvContent], { type: 'text/csv;charset=utf-8;' });
-    
+
     const link = document.createElement('a');
     link.href = URL.createObjectURL(blob);
     link.download = `inventaire_${new Date().toISOString().split('T')[0]}.csv`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
-    
+
     toast({
       title: 'Export réussi',
       description: `${filteredItems.length} item(s) exporté(s)`,
@@ -846,7 +1037,7 @@ export default function InventoryPage() {
   // Obtenir toutes les images d'un item
   const getItemImages = (item: Item): string[] => {
     if (!item.image) return [];
-    
+
     try {
       // Si c'est une string JSON
       if (typeof item.image === 'string') {
@@ -872,7 +1063,7 @@ export default function InventoryPage() {
       // Si le parsing échoue, retourner la string comme une seule image
       return [item.image as string];
     }
-    
+
     return [];
   };
 
@@ -917,7 +1108,7 @@ export default function InventoryPage() {
 
       setNewColumnName('');
       setNewColumnType('text');
-      
+
       // Recharger immédiatement les colonnes et items
       console.log('[COLUMN] ✅ Colonne créée, rechargement immédiat...');
       await loadCustomFields();
@@ -946,13 +1137,13 @@ export default function InventoryPage() {
     try {
       console.log('[COLUMN] 🗑️ Suppression de la colonne:', field.name);
       await deleteCustomField(field.id);
-      
+
       // Recharger immédiatement
       console.log('[COLUMN] ✅ Colonne supprimée, rechargement immédiat...');
       await loadCustomFields();
       await loadItems();
       console.log('[COLUMN] ✅ Affichage mis à jour!');
-      
+
       toast({
         title: 'Succès',
         description: `Colonne "${field.name}" supprimée`,
@@ -973,10 +1164,10 @@ export default function InventoryPage() {
   };
 
   // Nouvelles fonctions pour le ColumnManager
-  const handleAddColumnNew = async (column: { 
-    name: string; 
-    fieldType: string; 
-    options?: string[]; 
+  const handleAddColumnNew = async (column: {
+    name: string;
+    fieldType: string;
+    options?: string[];
     required: boolean;
   }) => {
     await createCustomField(column);
@@ -1008,7 +1199,7 @@ export default function InventoryPage() {
     console.log('[CATEGORY DEBUG] ====================================');
     console.log('[CATEGORY DEBUG] Tentative d\'ajout de catégorie');
     console.log('[CATEGORY DEBUG] Nom:', newCategoryName);
-    
+
     if (!newCategoryName.trim()) {
       console.log('[CATEGORY DEBUG] Nom vide, annulation');
       toast({
@@ -1025,7 +1216,7 @@ export default function InventoryPage() {
     const categoryExists = categories.some(
       cat => cat.toLowerCase() === newCategoryName.trim().toLowerCase()
     );
-    
+
     if (categoryExists) {
       console.log('[CATEGORY DEBUG] Catégorie existe déjà');
       toast({
@@ -1043,12 +1234,12 @@ export default function InventoryPage() {
       console.log('[CATEGORY DEBUG] Appel API createCategory...');
       await createCategory(newCategoryName.trim());
       console.log('[CATEGORY DEBUG] Catégorie créée avec succès');
-      
+
       // Recharger immédiatement
       console.log('[CATEGORY DEBUG] Rechargement immédiat des catégories...');
       await loadCategories();
       console.log('[CATEGORY DEBUG] Affichage mis à jour!');
-      
+
       toast({
         title: 'Succès',
         description: `Catégorie "${newCategoryName}" ajoutée et visible`,
@@ -1056,7 +1247,7 @@ export default function InventoryPage() {
         duration: 2000,
         isClosable: true,
       });
-      
+
       setNewCategoryName('');
     } catch (error) {
       console.error('[CATEGORY ERROR] Erreur ajout catégorie:', error);
@@ -1078,7 +1269,7 @@ export default function InventoryPage() {
     console.log('[CATEGORY DEBUG] ====================================');
     console.log('[CATEGORY DEBUG] Tentative de suppression de catégorie');
     console.log('[CATEGORY DEBUG] Nom:', categoryName);
-    
+
     if (!confirm(`Êtes-vous sûr de vouloir supprimer la catégorie "${categoryName}" ?`)) {
       console.log('[CATEGORY DEBUG] Suppression annulée par l\'utilisateur');
       return;
@@ -1089,13 +1280,13 @@ export default function InventoryPage() {
       console.log('[CATEGORY DEBUG] Appel API deleteCategory...');
       await deleteCategory(categoryName);
       console.log('[CATEGORY DEBUG] Catégorie supprimée avec succès');
-      
+
       // Recharger immédiatement
       console.log('[CATEGORY DEBUG] Rechargement immédiat des catégories et items...');
       await loadCategories();
       await loadItems(); // Car les items peuvent avoir été mis à jour
       console.log('[CATEGORY DEBUG] Affichage mis à jour!');
-      
+
       toast({
         title: 'Succès',
         description: `Catégorie "${categoryName}" supprimée`,
@@ -1124,7 +1315,7 @@ export default function InventoryPage() {
     setDraggedColumn(columnKey);
     e.dataTransfer.effectAllowed = 'move';
     e.dataTransfer.setData('text/html', columnKey);
-    
+
     // Style du curseur
     if (e.currentTarget instanceof HTMLElement) {
       e.currentTarget.style.opacity = '0.5';
@@ -1135,7 +1326,7 @@ export default function InventoryPage() {
     console.log('[DRAG] Fin drag');
     setDraggedColumn(null);
     setDragOverColumn(null);
-    
+
     // Réinitialiser le style
     if (e.currentTarget instanceof HTMLElement) {
       e.currentTarget.style.opacity = '1';
@@ -1145,7 +1336,7 @@ export default function InventoryPage() {
   const handleColumnDragOver = (e: React.DragEvent, columnKey: string) => {
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
-    
+
     if (draggedColumn && draggedColumn !== columnKey) {
       setDragOverColumn(columnKey);
     }
@@ -1158,7 +1349,7 @@ export default function InventoryPage() {
   const handleColumnDrop = (e: React.DragEvent, targetColumnKey: string) => {
     e.preventDefault();
     console.log('[DRAG] Drop colonne:', draggedColumn, '→', targetColumnKey);
-    
+
     if (!draggedColumn || draggedColumn === targetColumnKey) {
       setDragOverColumn(null);
       return;
@@ -1174,10 +1365,10 @@ export default function InventoryPage() {
       newOrder.splice(draggedIndex, 1);
       // Insérer à la nouvelle position
       newOrder.splice(targetIndex, 0, draggedColumn);
-      
+
       console.log('[DRAG] Nouvel ordre:', newOrder);
       setColumnOrder(newOrder);
-      
+
       toast({
         title: '✅ Colonnes réorganisées',
         description: 'L\'ordre des colonnes a été sauvegardé',
@@ -1215,46 +1406,46 @@ export default function InventoryPage() {
   const handleResizeStart = (e: React.MouseEvent, columnKey: string) => {
     e.preventDefault();
     e.stopPropagation();
-    
+
     const th = (e.target as HTMLElement).closest('th');
     if (!th) return;
-    
+
     const currentWidth = th.offsetWidth;
-    
+
     setResizingColumn(columnKey);
     setResizeStartX(e.clientX);
     setResizeStartWidth(currentWidth);
-    
+
     console.log('[RESIZE] Début resize:', columnKey, 'Largeur actuelle:', currentWidth);
-    
+
     // Désactiver la sélection de texte pendant le resize
     document.body.style.userSelect = 'none';
     document.body.style.cursor = 'col-resize';
-    
+
     // Ajouter des écouteurs globaux
     const handleMouseMove = (moveEvent: MouseEvent) => {
       moveEvent.preventDefault();
       const diff = moveEvent.clientX - e.clientX;
       const newWidth = Math.max(80, currentWidth + diff); // Minimum 80px
-      
+
       setColumnWidths(prev => ({
         ...prev,
         [columnKey]: newWidth
       }));
     };
-    
+
     const handleMouseUp = () => {
       console.log('[RESIZE] Fin resize:', columnKey);
       setResizingColumn(null);
-      
+
       // Restaurer le curseur et la sélection
       document.body.style.userSelect = '';
       document.body.style.cursor = '';
-      
+
       document.removeEventListener('mousemove', handleMouseMove);
       document.removeEventListener('mouseup', handleMouseUp);
     };
-    
+
     document.addEventListener('mousemove', handleMouseMove);
     document.addEventListener('mouseup', handleMouseUp);
   };
@@ -1274,23 +1465,30 @@ export default function InventoryPage() {
   };
 
   // Fonction pour rendre une cellule selon sa clé de colonne
-  const renderCell = (item: Item, columnKey: string) => {
+  const renderCell = (item: Item, columnKey: string, level: number = 0, isParent: boolean = false) => {
     const w = `${getColWidth(columnKey)}px`;
     const cellStyle = {
       width: w,
       minW: w,
       maxW: w,
     };
-    
+
     switch (columnKey) {
       case 'id':
-        return <Td key="id" fontSize="xs" fontFamily="mono" fontWeight="bold" color="purple.600" {...cellStyle}>{item.hexId || '-'}</Td>;
-      
+        return (
+          <Td key="id" fontSize="xs" fontFamily="mono" fontWeight={isParent ? "bold" : "normal"} color={isParent ? "purple.600" : "purple.400"} {...cellStyle}>
+            <Flex align="center">
+              {level > 0 && <Icon as={MdSubdirectoryArrowRight} color="gray.400" mr={2} ml={`${level * 10}px`} />}
+              <Text>{item.itemId || item.hexId || '-'}</Text>
+            </Flex>
+          </Td>
+        );
+
       case 'barcode':
         return (
           <Td key="barcode" fontSize="xs" fontFamily="mono" {...cellStyle}>
             {editingCell?.serialNumber === item.serialNumber &&
-            editingCell?.field === 'barcode' && !editingCell?.isCustom ? (
+              editingCell?.field === 'barcode' && !editingCell?.isCustom ? (
               <Input
                 value={editValue}
                 onChange={(e) => setEditValue(e.target.value)}
@@ -1329,12 +1527,12 @@ export default function InventoryPage() {
             )}
           </Td>
         );
-      
+
       case 'serialNumber':
         return (
           <Td key="serialNumber" fontSize="xs" fontFamily="mono" {...cellStyle}>
             {editingCell?.serialNumber === item.serialNumber &&
-            editingCell?.field === 'serialNumber' && !editingCell?.isCustom ? (
+              editingCell?.field === 'serialNumber' && !editingCell?.isCustom ? (
               <Textarea
                 value={editValue}
                 onChange={(e) => setEditValue(e.target.value)}
@@ -1378,12 +1576,12 @@ export default function InventoryPage() {
             )}
           </Td>
         );
-      
+
       case 'name':
         return (
           <Td key="name" fontSize="xs" {...cellStyle}>
             {editingCell?.serialNumber === item.serialNumber &&
-            editingCell?.field === 'name' && !editingCell?.isCustom ? (
+              editingCell?.field === 'name' && !editingCell?.isCustom ? (
               <Input
                 value={editValue}
                 onChange={(e) => setEditValue(e.target.value)}
@@ -1396,7 +1594,7 @@ export default function InventoryPage() {
               />
             ) : (
               <Box position="relative" _hover={{ '& > button': { opacity: 1 } }}>
-                <Text pr="20px" fontSize="xs">{item.name}</Text>
+                <Text pr="20px" fontSize="xs" fontWeight={isParent ? "bold" : "normal"}>{item.name}</Text>
                 <IconButton
                   aria-label="Modifier le nom"
                   icon={<Icon as={MdBrush} boxSize={3} />}
@@ -1419,69 +1617,21 @@ export default function InventoryPage() {
             )}
           </Td>
         );
-      
+
       case 'image':
-        // Code de la cellule image (complexe avec plusieurs images)
-        const images: string[] = [];
-        if (item.image) {
-          if (Array.isArray(item.image)) {
-            images.push(...item.image);
-          } else if (typeof item.image === 'string') {
-            if (item.image.startsWith('[') && item.image.endsWith(']')) {
-              try {
-                const parsed = JSON.parse(item.image);
-                if (Array.isArray(parsed)) images.push(...parsed);
-                else images.push(item.image);
-              } catch {
-                images.push(item.image);
-              }
-            } else {
-              images.push(item.image);
-            }
-          }
-        }
-        
         return (
           <Td key="image" {...cellStyle}>
-            {images.length > 0 ? (
+            {item.hasImage || item.image ? (
               <HStack spacing={1} flexWrap="wrap" align="flex-start" maxW="220px">
-                {images.map((imgSrc, idx) => (
-                  <Box
-                    key={idx}
-                    position="relative"
-                    w="40px"
-                    h="40px"
-                    borderRadius="md"
-                    overflow="hidden"
-                    border="1px solid"
-                    borderColor="gray.200"
-                    cursor="pointer"
-                    onClick={() => {
-                      setSelectedItemImages(images);
-                      setSelectedImageIndex(idx);
-                      onImageModalOpen();
-                    }}
-                    _hover={{
-                      transform: 'scale(1.05)',
-                      borderColor: 'blue.400',
-                      boxShadow: 'md',
-                    }}
-                    transition="all 0.2s"
-                  >
-                    <Image src={imgSrc} alt={`Image ${idx + 1}`} w="100%" h="100%" objectFit="cover" />
-                    {images.length > 1 && (
-                      <Badge
-                        position="absolute"
-                        top="2px"
-                        right="2px"
-                        fontSize="xx-small"
-                        colorScheme="blue"
-                      >
-                        {idx + 1}/{images.length}
-                      </Badge>
-                    )}
-                  </Box>
-                ))}
+                <AsyncImage
+                  item={item}
+                  onClick={(imagesArray) => {
+                    // Si on clique, on peut ouvrir le modal avec cette image
+                    setSelectedItemImages(imagesArray);
+                    setSelectedImageIndex(0);
+                    onImageModalOpen();
+                  }}
+                />
               </HStack>
             ) : (
               <Box
@@ -1498,12 +1648,12 @@ export default function InventoryPage() {
             )}
           </Td>
         );
-      
+
       case 'category':
         return (
           <Td key="category" fontSize="xs" {...cellStyle}>
             {editingCell?.serialNumber === item.serialNumber &&
-            editingCell?.field === 'category' && !editingCell?.isCustom ? (
+              editingCell?.field === 'category' && !editingCell?.isCustom ? (
               <Select
                 value={editValue}
                 onChange={(e) => setEditValue(e.target.value)}
@@ -1543,13 +1693,13 @@ export default function InventoryPage() {
             )}
           </Td>
         );
-      
+
       case 'brand':
       case 'model':
         return (
           <Td key={columnKey} fontSize="xs" {...cellStyle}>
             {editingCell?.serialNumber === item.serialNumber &&
-            editingCell?.field === columnKey && !editingCell?.isCustom ? (
+              editingCell?.field === columnKey && !editingCell?.isCustom ? (
               <Input
                 value={editValue}
                 onChange={(e) => setEditValue(e.target.value)}
@@ -1585,12 +1735,12 @@ export default function InventoryPage() {
             )}
           </Td>
         );
-      
+
       case 'quantity':
         return (
           <Td key="quantity" isNumeric {...cellStyle}>
             {editingCell?.serialNumber === item.serialNumber &&
-            editingCell?.field === 'quantity' && !editingCell?.isCustom ? (
+              editingCell?.field === 'quantity' && !editingCell?.isCustom ? (
               <NumberInput
                 value={editValue}
                 onChange={(valueString) => setEditValue(valueString)}
@@ -1631,7 +1781,7 @@ export default function InventoryPage() {
             )}
           </Td>
         );
-      
+
       case 'status': {
         const currentStatus = item.status || 'en_stock';
 
@@ -1679,38 +1829,68 @@ export default function InventoryPage() {
           </Td>
         );
       }
-      
+
       default:
         return <Td key={columnKey} {...cellStyle}>-</Td>;
     }
   };
 
   // Nombre total de colonnes pour le colspan
-  const totalColumns = columnOrder.length + customFields.length + 1; // +1 pour Actions
+  const totalColumns = columnOrder.length + customFields.length + 3; // drag + select + actions
 
   // Colonnes disponibles pour le mapping
   const availableColumns = [
     { key: '', label: '-- Ne pas importer --' },
+    { key: 'itemId', label: 'ID (AA1, AB2, ...)' },
+    { key: 'hexId', label: 'ID Hex' },
     { key: 'name', label: 'Nom', required: true },
     { key: 'serialNumber', label: 'Numéro de série', required: true },
-    { key: 'scannedCode', label: 'Code-barres' },
+    { key: 'barcode', label: 'Code-barres (barcode)' },
+    { key: 'scannedCode', label: 'Code-barres (scannedCode)' },
     { key: 'brand', label: 'Marque' },
     { key: 'model', label: 'Modèle' },
     { key: 'category', label: 'Catégorie' },
     { key: 'quantity', label: 'Quantité' },
     { key: 'categoryDetails', label: 'Description' },
+    { key: 'status', label: 'Statut' },
     { key: 'itemType', label: 'Type' },
+    { key: 'rentalEndDate', label: 'Fin location' },
+    { key: 'parentId', label: 'Parent ID' },
+    { key: 'displayOrder', label: 'Ordre affichage' },
+    { key: 'image', label: 'Image' },
+    { key: 'media', label: 'Media' },
     ...customFields.map(f => ({ key: `custom_${f.fieldKey}`, label: `[Perso] ${f.name}` })),
   ];
 
+  const detectCsvDelimiter = (text: string): ',' | ';' => {
+    const lines = text.split(/\r?\n/).filter(line => line.trim());
+    const sample = lines[0] || '';
+    let commaCount = 0;
+    let semicolonCount = 0;
+    let inQuotes = false;
+    for (let i = 0; i < sample.length; i++) {
+      const char = sample[i];
+      if (char === '"') {
+        inQuotes = !inQuotes;
+        continue;
+      }
+      if (!inQuotes) {
+        if (char === ',') commaCount++;
+        if (char === ';') semicolonCount++;
+      }
+    }
+    return semicolonCount > commaCount ? ';' : ',';
+  };
+
   // Parser le CSV
   const parseCSV = (text: string): string[][] => {
+    const delimiter = detectCsvDelimiter(text);
     const lines = text.split(/\r?\n/).filter(line => line.trim());
     return lines.map(line => {
       const result: string[] = [];
       let current = '';
       let inQuotes = false;
-      
+
       for (let i = 0; i < line.length; i++) {
         const char = line[i];
         if (char === '"') {
@@ -1720,7 +1900,7 @@ export default function InventoryPage() {
           } else {
             inQuotes = !inQuotes;
           }
-        } else if ((char === ',' || char === ';') && !inQuotes) {
+        } else if (char === delimiter && !inQuotes) {
           result.push(current.trim());
           current = '';
         } else {
@@ -1732,64 +1912,84 @@ export default function InventoryPage() {
     });
   };
 
+  const normalizeImportedImageValue = (rawValue: string): string => {
+    const value = rawValue.trim();
+    if (!value) return '';
+
+    // URL classique (Cloudinary, CDN, etc.)
+    if (/^https?:\/\//i.test(value)) return value;
+    // Data URL déjà complète
+    if (/^data:image\//i.test(value)) return value;
+    // JSON (tableau/string) déjà formaté
+    if (value.startsWith('[') || value.startsWith('{')) return value;
+
+    // Base64 brute sans prefix -> on force un mime image générique
+    const base64Regex = /^[A-Za-z0-9+/=\s]+$/;
+    if (base64Regex.test(value) && value.length > 80) {
+      return `data:image/jpeg;base64,${value.replace(/\s+/g, '')}`;
+    }
+
+    return value;
+  };
+
   // Trouver les en-têtes de colonnes en cherchant la première valeur non vide
   const detectColumnHeaders = (parsed: string[][]): string[] => {
     if (parsed.length === 0) return [];
-    
+
     const numColumns = Math.max(...parsed.map(row => row.length));
     const headers: string[] = [];
-    
+
     // Pour chaque colonne, chercher la première valeur non vide
     for (let colIndex = 0; colIndex < numColumns; colIndex++) {
       let headerFound = false;
-      
+
       // Parcourir les lignes jusqu'à trouver une valeur non vide
       for (let rowIndex = 0; rowIndex < parsed.length; rowIndex++) {
         const cellValue = parsed[rowIndex][colIndex]?.trim() || '';
-        
+
         if (cellValue !== '') {
           headers[colIndex] = cellValue;
           headerFound = true;
           break;
         }
       }
-      
+
       // Si aucune valeur trouvée, utiliser un nom par défaut
       if (!headerFound) {
         headers[colIndex] = `Colonne ${colIndex + 1}`;
       }
     }
-    
+
     return headers;
   };
 
   // Trouver la première ligne de données (après les en-têtes)
   const findDataStartRow = (parsed: string[][], headers: string[]): number => {
     if (parsed.length === 0) return 0;
-    
+
     // Trouver la première ligne qui contient les en-têtes
     let headerRow = -1;
     for (let rowIndex = 0; rowIndex < Math.min(5, parsed.length); rowIndex++) {
       const row = parsed[rowIndex];
-      
+
       // Vérifier si cette ligne contient au moins 2 en-têtes (pour être sûr)
       const headerMatches = headers.filter((header, colIndex) => {
         const cellValue = row[colIndex]?.trim() || '';
         return cellValue === header && header !== '' && !header.startsWith('Colonne ');
       }).length;
-      
+
       if (headerMatches >= 2) {
         headerRow = rowIndex;
         break;
       }
     }
-    
+
     // Si aucun en-tête n'est trouvé, supposer que les données commencent à la ligne 1 (pas d'en-tête)
     if (headerRow === -1) {
       console.log('[CSV] Aucun en-tête trouvé, les données commencent à la ligne 0');
       return 0;
     }
-    
+
     // Les données commencent après la ligne d'en-tête
     const dataStart = headerRow + 1;
     console.log('[CSV] En-tête trouvé à la ligne', headerRow, '→ données commencent à la ligne', dataStart);
@@ -1805,7 +2005,7 @@ export default function InventoryPage() {
     reader.onload = (e) => {
       const text = e.target?.result as string;
       const parsed = parseCSV(text);
-      
+
       if (parsed.length < 1) {
         toast({
           title: 'Erreur',
@@ -1819,23 +2019,33 @@ export default function InventoryPage() {
 
       // Détecter les en-têtes en cherchant la première valeur non vide pour chaque colonne
       const detectedHeaders = detectColumnHeaders(parsed);
-      
+
       // Trouver où commencent les données
       const dataStartRow = findDataStartRow(parsed, detectedHeaders);
-      
+
       const dataRows = parsed.slice(dataStartRow);
-      
+
       console.log('[CSV IMPORT] Lignes parsées:', parsed.length);
       console.log('[CSV IMPORT] En-têtes détectés:', detectedHeaders);
       console.log('[CSV IMPORT] Début des données à la ligne:', dataStartRow);
       console.log('[CSV IMPORT] Nombre de lignes de données:', dataRows.length);
       console.log('[CSV IMPORT] Premières lignes:', dataRows.slice(0, 3));
-      
+
       // Auto-mapping intelligent basé sur les en-têtes détectés
       const autoMapping: Record<string, string> = {};
       detectedHeaders.forEach((header, index) => {
         const headerLower = header.toLowerCase().trim();
-        if (headerLower.includes('nom') || headerLower === 'name') {
+        if (
+          headerLower === 'id' ||
+          headerLower === 'item id' ||
+          headerLower === 'itemid' ||
+          headerLower === 'id item' ||
+          headerLower === 'identifiant'
+        ) {
+          autoMapping[index.toString()] = 'itemId';
+        } else if (headerLower.includes('hex')) {
+          autoMapping[index.toString()] = 'hexId';
+        } else if (headerLower.includes('nom') || headerLower === 'name') {
           autoMapping[index.toString()] = 'name';
         } else if (headerLower.includes('série') || headerLower.includes('serial')) {
           autoMapping[index.toString()] = 'serialNumber';
@@ -1851,8 +2061,18 @@ export default function InventoryPage() {
           autoMapping[index.toString()] = 'quantity';
         } else if (headerLower.includes('description') || headerLower.includes('détails')) {
           autoMapping[index.toString()] = 'categoryDetails';
+        } else if (headerLower.includes('status') || headerLower.includes('statut')) {
+          autoMapping[index.toString()] = 'status';
         } else if (headerLower.includes('type')) {
           autoMapping[index.toString()] = 'itemType';
+        } else if (headerLower.includes('parent')) {
+          autoMapping[index.toString()] = 'parentId';
+        } else if (headerLower.includes('ordre') || headerLower.includes('order')) {
+          autoMapping[index.toString()] = 'displayOrder';
+        } else if (headerLower.includes('media')) {
+          autoMapping[index.toString()] = 'media';
+        } else if (headerLower.includes('image') || headerLower.includes('photo')) {
+          autoMapping[index.toString()] = 'image';
         }
       });
 
@@ -1881,7 +2101,7 @@ export default function InventoryPage() {
       });
     };
     reader.readAsText(file, 'UTF-8');
-    
+
     // Reset l'input pour permettre de re-sélectionner le même fichier
     event.target.value = '';
   };
@@ -1950,42 +2170,42 @@ export default function InventoryPage() {
     let successCount = 0;
     let errorCount = 0;
 
+    // Phase 1 : Parser toutes les lignes en objets itemData
+    const parsedItems: Partial<Item>[] = [];
     for (let i = 0; i < csvData.length; i++) {
       const row = csvData[i];
-      console.log(`[IMPORT] Ligne ${i + 1}/${csvData.length}:`, row);
-      
       try {
         const itemData: Partial<Item> = {};
         const customData: Record<string, any> = {};
 
-        // Construire l'item à partir du mapping
         Object.entries(columnMapping).forEach(([csvIndex, inventoryField]) => {
           if (!inventoryField) return;
-          
           const value = row[parseInt(csvIndex)] || '';
-          
           if (inventoryField.startsWith('custom_')) {
             const customKey = inventoryField.replace('custom_', '');
             customData[customKey] = value;
           } else if (inventoryField === 'quantity') {
             itemData[inventoryField] = parseInt(value) || 1;
+          } else if (inventoryField === 'displayOrder') {
+            itemData.displayOrder = Number.isFinite(parseInt(value)) ? parseInt(value) : 0;
+          } else if (inventoryField === 'parentId') {
+            itemData.parentId = value.trim() ? (Number.isFinite(parseInt(value)) ? parseInt(value) : null) : null;
+          } else if (inventoryField === 'image') {
+            const normalizedImage = normalizeImportedImageValue(value);
+            if (normalizedImage) itemData.image = normalizedImage;
           } else if (value.trim()) {
-            // N'assigner que si la valeur n'est pas vide
             (itemData as any)[inventoryField] = value.trim();
           }
         });
 
-        // Ajouter les champs personnalisés
         if (Object.keys(customData).length > 0) {
           itemData.customData = customData;
         }
 
-        // Générer un numéro de série si vide
         if (!itemData.serialNumber || !itemData.serialNumber.trim()) {
           itemData.serialNumber = `IMP-${Date.now()}-${i}`;
         }
 
-        // Générer un nom si vide (en utilisant d'autres champs disponibles)
         if (!itemData.name || !itemData.name.trim()) {
           if (itemData.brand && itemData.model) {
             itemData.name = `${itemData.brand} ${itemData.model}`;
@@ -2000,18 +2220,60 @@ export default function InventoryPage() {
           }
         }
 
-        // Vérifier que les données sont valides avant d'importer
         if (!itemData.name || !itemData.serialNumber) {
           console.warn(`[IMPORT] Ligne ${i + 1} ignorée: nom ou numéro de série manquant`, itemData);
           errorCount++;
+          parsedItems.push(null as any); // placeholder pour garder l'index
           continue;
         }
 
-        console.log(`[IMPORT] Création de l'item:`, itemData);
-        // Créer l'item
-        await saveItem(itemData);
+        parsedItems.push(itemData);
+      } catch (error) {
+        console.error(`[IMPORT] ✗ Erreur parsing ligne ${i + 1}:`, error);
+        errorCount++;
+        parsedItems.push(null as any);
+      }
+    }
+
+    // Phase 2 : Regrouper par itemId (priorité) puis par scannedCode/barcode
+    // La clé de groupe = itemId si défini, sinon scannedCode/barcode, sinon null (pas de groupe)
+    const groupParentId = new Map<string, number>(); // groupKey → id du 1er item créé (parent)
+
+    // Phase 3 : Créer les items en respectant la hiérarchie
+    for (let i = 0; i < parsedItems.length; i++) {
+      const itemData = parsedItems[i];
+      if (!itemData) {
+        setImportProgress({ current: i + 1, total: csvData.length, errors: errorCount });
+        continue;
+      }
+
+      try {
+        // Déterminer la clé de groupe (itemId > scannedCode/barcode)
+        const groupKey = itemData.itemId?.trim()
+          ? itemData.itemId.trim().toUpperCase()
+          : (itemData.scannedCode?.trim() || itemData.barcode?.trim() || null);
+
+        if (groupKey && groupParentId.has(groupKey)) {
+          // Ce groupe a déjà un parent → créer en tant que sous-item
+          const parentDbId = groupParentId.get(groupKey)!;
+          itemData.parentId = parentDbId;
+          itemData.displayOrder = itemData.displayOrder || (i + 1);
+          console.log(`[IMPORT] Ligne ${i + 1} → sous-item du parent id=${parentDbId} (groupe "${groupKey}")`);
+        } else {
+          // Premier de ce groupe → sera le parent
+          itemData.parentId = null;
+        }
+
+        console.log(`[IMPORT] Création item:`, itemData);
+        const result = await saveItem(itemData);
         successCount++;
-        console.log(`[IMPORT] ✓ Item ${i + 1} créé avec succès`);
+        console.log(`[IMPORT] ✓ Item ${i + 1} créé (id=${result.id})`);
+
+        // Enregistrer l'id du parent pour ce groupe (seulement la première fois)
+        if (groupKey && !groupParentId.has(groupKey)) {
+          groupParentId.set(groupKey, result.id);
+          console.log(`[IMPORT] Groupe "${groupKey}" → parent id=${result.id}`);
+        }
       } catch (error) {
         console.error(`[IMPORT] ✗ Erreur import ligne ${i + 1}:`, error);
         errorCount++;
@@ -2019,30 +2281,129 @@ export default function InventoryPage() {
 
       setImportProgress({ current: i + 1, total: csvData.length, errors: errorCount });
     }
-    
+
     console.log('[IMPORT] Terminé:', successCount, 'succès,', errorCount, 'erreurs');
 
     setIsImporting(false);
-    
-    // Recharger immédiatement les données pour voir les nouveaux items
+
     console.log('[IMPORT] ✅ Import terminé, rechargement immédiat...');
     await loadItems();
     console.log('[IMPORT] ✅ Affichage mis à jour!');
-    
+
     onImportClose();
-    
+
+    const groupCount = groupParentId.size;
     toast({
       title: '✅ Import terminé',
-      description: `${successCount} items importés et visibles${errorCount > 0 ? `, ${errorCount} erreurs` : ''}`,
+      description: `${successCount} items importés${groupCount > 0 ? ` (${groupCount} groupe(s) avec sous-items)` : ''}${errorCount > 0 ? `, ${errorCount} erreurs` : ''}`,
       status: errorCount > 0 ? 'warning' : 'success',
       duration: 5000,
       isClosable: true,
     });
-    
+
     // Reset
     setCsvData([]);
     setCsvHeaders([]);
     setColumnMapping({});
+  };
+
+  // Regrouper automatiquement les items existants par ID
+  const handleAutoGroupExistingItems = async () => {
+    if (items.length === 0) {
+      toast({
+        title: 'Info',
+        description: 'Aucun item à regrouper.',
+        status: 'info',
+        duration: 3000,
+        isClosable: true,
+      });
+      return;
+    }
+
+    // Phase 1 : Grouper par itemId (priorité) sinon scannedCode/barcode
+    const groups = new Map<string, Item[]>();
+
+    items.forEach(item => {
+      const groupKey = item.itemId?.trim()
+        ? item.itemId.trim().toUpperCase()
+        : (item.scannedCode?.trim() || item.barcode?.trim() || null);
+
+      if (groupKey) {
+        if (!groups.has(groupKey)) {
+          groups.set(groupKey, []);
+        }
+        groups.get(groupKey)!.push(item);
+      }
+    });
+
+    // Phase 2 : Préparer les mises à jour
+    const updates: { id: number; parentId: number | null; displayOrder: number }[] = [];
+    let groupCount = 0;
+    let itemsUpdatedCount = 0;
+
+    groups.forEach((groupItems, key) => {
+      // S'il n'y a qu'un seul item, pas besoin de grouper
+      if (groupItems.length <= 1) return;
+
+      groupCount++;
+
+      // Trouver le parent logique (celui qui est déjà parent, ou le plus ancien, etc.)
+      let parentItem = groupItems.find(i => i.parentId === null) || groupItems[0];
+      const parentDbId = parentItem.id!;
+
+      // On met à jour tous les autres items du groupe pour qu'ils aient ce parentId
+      groupItems.forEach((item, index) => {
+        if (item.id !== parentItem.id) {
+          // Si l'item n'était pas déjà enfant de ce parent
+          if (item.parentId !== parentDbId) {
+            updates.push({
+              id: item.id!,
+              parentId: parentDbId,
+              displayOrder: item.displayOrder ?? index
+            });
+            itemsUpdatedCount++;
+          }
+        }
+      });
+    });
+
+    if (updates.length === 0) {
+      toast({
+        title: 'Info',
+        description: 'Tous les items partageant un même ID sont déjà groupés correctement.',
+        status: 'info',
+        duration: 3000,
+        isClosable: true,
+      });
+      return;
+    }
+
+    if (window.confirm(`Voulez-vous regrouper automatiquement ${itemsUpdatedCount} item(s) répartis dans ${groupCount} groupe(s) basés sur leur ID / Code-barres ?\n\nCette action va lier les doublons en tant que sous-items.`)) {
+      try {
+        console.log('[AUTO-GROUP] Envoi de', updates.length, 'mises à jour:', updates);
+        await reorderItemHierarchy(updates);
+
+        toast({
+          title: 'Regroupement terminé',
+          description: `${itemsUpdatedCount} item(s) liés avec succès.`,
+          status: 'success',
+          duration: 4000,
+          isClosable: true,
+        });
+
+        // Rafraîchir l'affichage
+        await loadItems();
+      } catch (error) {
+        console.error('[AUTO-GROUP] Erreur:', error);
+        toast({
+          title: 'Erreur',
+          description: 'Une erreur est survenue lors du regroupement.',
+          status: 'error',
+          duration: 4000,
+          isClosable: true,
+        });
+      }
+    }
   };
 
   return (
@@ -2052,7 +2413,7 @@ export default function InventoryPage() {
           {/* Filtres */}
           <Flex gap={4} wrap="wrap" align="center">
             {/* Barre de recherche globale */}
-            <Tooltip 
+            <Tooltip
               label="Recherche dans tous les champs : nom, code-barres, numéro de série, marque, modèle, catégorie, description et champs personnalisés"
               placement="bottom-start"
               hasArrow
@@ -2119,8 +2480,8 @@ export default function InventoryPage() {
 
             {/* Indicateur de résultats */}
             {searchTerm && (
-              <Badge 
-                colorScheme={filteredItems.length > 0 ? 'green' : 'red'} 
+              <Badge
+                colorScheme={filteredItems.length > 0 ? 'green' : 'red'}
                 fontSize="xs"
                 px={3}
                 py={1}
@@ -2138,7 +2499,7 @@ export default function InventoryPage() {
               >
                 Gérer les colonnes
               </Button>
-              
+
               {/* Nouveau composant de filtres avancés */}
               <AdvancedFilters
                 columns={customFields}
@@ -2164,6 +2525,15 @@ export default function InventoryPage() {
                 variant="outline"
               >
                 Exporter
+              </Button>
+              <Button
+                leftIcon={<Icon as={MdAutoFixHigh} />}
+                onClick={handleAutoGroupExistingItems}
+                colorScheme="blue"
+                variant="outline"
+                size="md"
+              >
+                Regrouper (Auto)
               </Button>
               <Button
                 leftIcon={<Icon as={MdDownload} />}
@@ -2194,7 +2564,17 @@ export default function InventoryPage() {
                 Importer CSV
               </Button>
 
-              
+              <Button
+                leftIcon={<Icon as={MdDelete} />}
+                colorScheme="red"
+                variant="outline"
+                isDisabled={selectedSerialNumbers.length === 0}
+                onClick={handleDeleteSelected}
+              >
+                Supprimer selection ({selectedSerialNumbers.length})
+              </Button>
+
+
               {/* Bouton Tout supprimer - Discret */}
               <IconButton
                 aria-label="Tout supprimer"
@@ -2227,7 +2607,7 @@ export default function InventoryPage() {
             borderColor={useColorModeValue('gray.200', 'whiteAlpha.200')}
             bg={useColorModeValue('gray.50', 'navy.900')}
           >
-              <Table
+            <Table
               variant="simple"
               size="sm"
               sx={{
@@ -2256,12 +2636,21 @@ export default function InventoryPage() {
                       </Box>
                     </Tooltip>
                   </Th>
-                  
+
+                  <Th width="44px" minW="44px" maxW="44px" p={1}>
+                    <Checkbox
+                      isChecked={allSelectedOnPage}
+                      isIndeterminate={someSelectedOnPage}
+                      onChange={(e) => toggleSelectAllOnPage(e.target.checked)}
+                      aria-label="Selectionner tous les items de la page"
+                    />
+                  </Th>
+
                   {/* Colonnes standards réorganisables */}
                   {columnOrder.map((columnKey) => {
                     const colDef = columnDefinitions[columnKey];
                     if (!colDef) return null;
-                    
+
                     return (
                       <Th
                         key={columnKey}
@@ -2311,7 +2700,7 @@ export default function InventoryPage() {
                             </Box>
                           </HStack>
                         </HStack>
-                        
+
                         {/* Poignée de redimensionnement - zone plus large */}
                         <Box
                           position="absolute"
@@ -2321,7 +2710,7 @@ export default function InventoryPage() {
                           width="10px"
                           cursor="col-resize"
                           bg="transparent"
-                          _hover={{ 
+                          _hover={{
                             '&::after': {
                               content: '""',
                               position: 'absolute',
@@ -2357,10 +2746,10 @@ export default function InventoryPage() {
                       </Th>
                     );
                   })}
-                  
+
                   {/* Colonnes personnalisées (non réorganisables pour l'instant) */}
                   {customFields.map((field) => (
-                    <Th 
+                    <Th
                       key={field.id}
                       position="relative"
                       width={`${getColWidth(`custom_${field.fieldKey}`)}px`}
@@ -2391,7 +2780,7 @@ export default function InventoryPage() {
                           </Badge>
                         </HStack>
                       </HStack>
-                      
+
                       {/* Poignée de redimensionnement - zone plus large */}
                       <Box
                         position="absolute"
@@ -2401,7 +2790,7 @@ export default function InventoryPage() {
                         width="10px"
                         cursor="col-resize"
                         bg="transparent"
-                        _hover={{ 
+                        _hover={{
                           '&::after': {
                             content: '""',
                             position: 'absolute',
@@ -2436,7 +2825,7 @@ export default function InventoryPage() {
                       />
                     </Th>
                   ))}
-                  
+
                   {/* Colonne Actions (fixe) */}
                   <Th
                     position="relative"
@@ -2448,7 +2837,7 @@ export default function InventoryPage() {
                     <HStack spacing={1} justify="space-between" pr="10px">
                       <Text flex={1}>Actions</Text>
                     </HStack>
-                    
+
                     {/* Poignée de redimensionnement - zone plus large */}
                     <Box
                       position="absolute"
@@ -2458,7 +2847,7 @@ export default function InventoryPage() {
                       width="10px"
                       cursor="col-resize"
                       bg="transparent"
-                      _hover={{ 
+                      _hover={{
                         '&::after': {
                           content: '""',
                           position: 'absolute',
@@ -2516,104 +2905,113 @@ export default function InventoryPage() {
                     const isSearchMatch = searchTerm && item.id ? matchedItemIds.has(item.id) : false;
 
                     return (
-                        <HierarchicalInventoryRow
-                          key={item.serialNumber}
-                          item={item}
-                          level={level}
-                          hasChildren={hasItemChildren}
-                          isDropTarget={isDropTarget}
-                          isDragging={isDragging}
-                          isSearchMatch={isSearchMatch}
-                          isSearchActive={!!searchTerm}
-                          onDragStart={hierarchy.handleDragStart}
-                          onDragOver={hierarchy.handleDragOver}
-                          onDragLeave={hierarchy.handleDragLeave}
-                          onDrop={hierarchy.handleDrop}
-                          onDragEnd={hierarchy.handleDragEnd}
-                          onRemoveFromGroup={level > 0 ? () => hierarchy.removeFromGroup(item.id!) : undefined}
-                        >
-                          {/* Colonnes standards dans l'ordre défini */}
-                          {columnOrder.map((columnKey) => renderCell(item, columnKey))}
-
-                      {/* Valeurs des colonnes personnalisées */}
-                      {customFields.map((field) => (
-                        <Td
-                          key={field.id}
-                          width={`${getColWidth(`custom_${field.fieldKey}`)}px`}
-                          minW={`${getColWidth(`custom_${field.fieldKey}`)}px`}
-                          maxW={`${getColWidth(`custom_${field.fieldKey}`)}px`}
-                        >
-                          {editingCell?.serialNumber === item.serialNumber &&
-                          editingCell?.field === field.fieldKey && editingCell?.isCustom ? (
-                            <Input
-                              value={editValue}
-                              onChange={(e) => setEditValue(e.target.value)}
-                              onBlur={saveEdit}
-                              onKeyPress={(e) => {
-                                if (e.key === 'Enter') saveEdit();
-                              }}
-                              size="xs"
-                              autoFocus
-                              type={field.fieldType === 'number' ? 'number' : field.fieldType === 'date' ? 'date' : 'text'}
-                            />
-                          ) : (
-                            <Box position="relative" _hover={{ '& > button': { opacity: 1 } }}>
-                              {field.fieldType === 'checkbox' ? (
-                                <Box pr="20px">
-                                  <Checkbox isChecked={getCustomFieldValue(item, field.fieldKey) === 'true'} isReadOnly />
-                                </Box>
-                              ) : (
-                                <Text pr="20px" fontSize="sm">
-                                  {getCustomFieldValue(item, field.fieldKey) || '-'}
-                                </Text>
-                              )}
-                              <IconButton
-                                aria-label="Modifier"
-                                icon={<Icon as={MdBrush} boxSize={3} />}
-                                size="xs"
-                                position="absolute"
-                                top="0"
-                                right="0"
-                                variant="ghost"
-                                colorScheme="gray"
-                                opacity={0.3}
-                                _hover={{ opacity: 1, color: 'blue.500' }}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  startEdit(item.serialNumber, field.fieldKey, getCustomFieldValue(item, field.fieldKey), true);
-                                }}
-                                h="16px"
-                                minW="16px"
-                              />
-                            </Box>
-                          )}
-                        </Td>
-                      ))}
-
-                      {/* Colonne Actions (fixe) */}
-                      <Td
-                        width={`${getColWidth('actions')}px`}
-                        minW={`${getColWidth('actions')}px`}
-                        maxW={`${getColWidth('actions')}px`}
+                      <HierarchicalInventoryRow
+                        key={item.serialNumber}
+                        item={item}
+                        level={level}
+                        hasChildren={hasItemChildren}
+                        isDropTarget={isDropTarget}
+                        isDragging={isDragging}
+                        isSearchMatch={isSearchMatch}
+                        isSearchActive={!!searchTerm}
+                        onDragStart={hierarchy.handleDragStart}
+                        onDragOver={hierarchy.handleDragOver}
+                        onDragLeave={hierarchy.handleDragLeave}
+                        onDrop={hierarchy.handleDrop}
+                        onDragEnd={hierarchy.handleDragEnd}
+                        onRemoveFromGroup={level > 0 ? () => hierarchy.removeFromGroup(item.id!) : undefined}
                       >
-                        <HStack spacing={1}>
-                          <IconButton
-                            aria-label="Modifier"
-                            icon={<Icon as={MdEdit} />}
-                            size="xs"
-                            onClick={() => startEdit(item.serialNumber, 'name', item.name)}
+                        <Td width="44px" minW="44px" maxW="44px" p={1}>
+                          <Checkbox
+                            isChecked={selectedSerialNumbers.includes(item.serialNumber)}
+                            onChange={(e) => toggleItemSelection(item.serialNumber, e.target.checked)}
+                            onClick={(e) => e.stopPropagation()}
+                            aria-label={`Selectionner ${item.serialNumber}`}
                           />
-                          <IconButton
-                            aria-label="Supprimer"
-                            icon={<Icon as={MdDelete} />}
-                            size="xs"
-                            colorScheme="red"
-                            onClick={() => handleDelete(item.serialNumber)}
-                          />
-                        </HStack>
-                      </Td>
-                        </HierarchicalInventoryRow>
-                      );
+                        </Td>
+
+                        {/* Colonnes standards dans l'ordre défini */}
+                        {columnOrder.map((columnKey) => renderCell(item, columnKey, level, hasItemChildren))}
+
+                        {/* Valeurs des colonnes personnalisées */}
+                        {customFields.map((field) => (
+                          <Td
+                            key={field.id}
+                            width={`${getColWidth(`custom_${field.fieldKey}`)}px`}
+                            minW={`${getColWidth(`custom_${field.fieldKey}`)}px`}
+                            maxW={`${getColWidth(`custom_${field.fieldKey}`)}px`}
+                          >
+                            {editingCell?.serialNumber === item.serialNumber &&
+                              editingCell?.field === field.fieldKey && editingCell?.isCustom ? (
+                              <Input
+                                value={editValue}
+                                onChange={(e) => setEditValue(e.target.value)}
+                                onBlur={saveEdit}
+                                onKeyPress={(e) => {
+                                  if (e.key === 'Enter') saveEdit();
+                                }}
+                                size="xs"
+                                autoFocus
+                                type={field.fieldType === 'number' ? 'number' : field.fieldType === 'date' ? 'date' : 'text'}
+                              />
+                            ) : (
+                              <Box position="relative" _hover={{ '& > button': { opacity: 1 } }}>
+                                {field.fieldType === 'checkbox' ? (
+                                  <Box pr="20px">
+                                    <Checkbox isChecked={getCustomFieldValue(item, field.fieldKey) === 'true'} isReadOnly />
+                                  </Box>
+                                ) : (
+                                  <Text pr="20px" fontSize="sm">
+                                    {getCustomFieldValue(item, field.fieldKey) || '-'}
+                                  </Text>
+                                )}
+                                <IconButton
+                                  aria-label="Modifier"
+                                  icon={<Icon as={MdBrush} boxSize={3} />}
+                                  size="xs"
+                                  position="absolute"
+                                  top="0"
+                                  right="0"
+                                  variant="ghost"
+                                  colorScheme="gray"
+                                  opacity={0.3}
+                                  _hover={{ opacity: 1, color: 'blue.500' }}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    startEdit(item.serialNumber, field.fieldKey, getCustomFieldValue(item, field.fieldKey), true);
+                                  }}
+                                  h="16px"
+                                  minW="16px"
+                                />
+                              </Box>
+                            )}
+                          </Td>
+                        ))}
+
+                        {/* Colonne Actions (fixe) */}
+                        <Td
+                          width={`${getColWidth('actions')}px`}
+                          minW={`${getColWidth('actions')}px`}
+                          maxW={`${getColWidth('actions')}px`}
+                        >
+                          <HStack spacing={1}>
+                            <IconButton
+                              aria-label="Modifier"
+                              icon={<Icon as={MdEdit} />}
+                              size="xs"
+                              onClick={() => startEdit(item.serialNumber, 'name', item.name)}
+                            />
+                            <IconButton
+                              aria-label="Supprimer"
+                              icon={<Icon as={MdDelete} />}
+                              size="xs"
+                              colorScheme="red"
+                              onClick={() => handleDelete(item.serialNumber)}
+                            />
+                          </HStack>
+                        </Td>
+                      </HierarchicalInventoryRow>
+                    );
                   })
                 )}
               </Tbody>
@@ -2651,7 +3049,7 @@ export default function InventoryPage() {
       </Card>
 
       {/* Modals */}
-      
+
       {/* Modal Import CSV - fermeture possible par clic extérieur ou Échap */}
       <Modal isOpen={isImportOpen} onClose={onImportClose} size="xl" scrollBehavior="inside" closeOnOverlayClick closeOnEsc>
         <ModalOverlay />
@@ -2732,7 +3130,7 @@ export default function InventoryPage() {
                       <VStack align="stretch" spacing={2}>
                         {displayHeaders.map((header, index) => {
                           const isAssigned = Object.values(displayMapping).includes(displayMapping[index.toString()]);
-                          
+
                           return (
                             <Box
                               key={index}
@@ -2783,7 +3181,7 @@ export default function InventoryPage() {
                             (key) => displayMapping[key] === col.key
                           );
                           const csvHeader = csvIndex !== undefined ? displayHeaders[parseInt(csvIndex)] : null;
-                          
+
                           return (
                             <Box
                               key={col.key}
@@ -2823,8 +3221,8 @@ export default function InventoryPage() {
                                 </HStack>
                                 {csvHeader && (
                                   <HStack mt={1}>
-                                    <Badge 
-                                      colorScheme="blue" 
+                                    <Badge
+                                      colorScheme="blue"
                                       fontSize="xx-small"
                                       cursor="pointer"
                                       _hover={{ bg: 'red.500', color: 'white' }}
@@ -2837,7 +3235,7 @@ export default function InventoryPage() {
                                         console.log('[MAPPING DEBUG] Colonne CSV mappée:', csvHeader);
                                         console.log('[MAPPING DEBUG] Index CSV:', csvIndex);
                                         console.log('[MAPPING DEBUG] Mapping actuel:', columnMapping);
-                                        
+
                                         if (csvIndex !== undefined) {
                                           try {
                                             // Supprimer le mapping
@@ -2848,7 +3246,7 @@ export default function InventoryPage() {
                                               return newMapping;
                                             });
                                             console.log('[MAPPING DEBUG] Mapping supprimé avec succès!');
-                                            
+
                                             toast({
                                               title: 'Mapping supprimé',
                                               description: `"${csvHeader}" n'est plus lié à "${col.label}"`,
@@ -2921,7 +3319,7 @@ export default function InventoryPage() {
                                       console.log('[SELECT DEBUG] Colonne CSV:', header, '(index:', index, ')');
                                       console.log('[SELECT DEBUG] Ancienne valeur:', displayMapping[index.toString()]);
                                       console.log('[SELECT DEBUG] Nouvelle valeur:', newValue);
-                                      
+
                                       if (newValue === '') {
                                         console.log('[SELECT DEBUG] Suppression du mapping');
                                         setColumnMapping(prev => {
@@ -2957,14 +3355,14 @@ export default function InventoryPage() {
                                         console.log('[BUTTON DEBUG] Clic sur bouton X de suppression');
                                         console.log('[BUTTON DEBUG] Colonne CSV:', header, '(index:', index, ')');
                                         console.log('[BUTTON DEBUG] Mapping à supprimer:', displayMapping[index.toString()]);
-                                        
+
                                         setColumnMapping(prev => {
                                           const newMapping = { ...prev };
                                           delete newMapping[index.toString()];
                                           console.log('[BUTTON DEBUG] Nouveau mapping:', newMapping);
                                           return newMapping;
                                         });
-                                        
+
                                         toast({
                                           title: 'Mapping supprimé',
                                           description: `"${header}" n'est plus lié`,
@@ -3088,9 +3486,9 @@ export default function InventoryPage() {
       <Modal isOpen={isImageModalOpen} onClose={onImageModalClose} size="full">
         <ModalOverlay bg="blackAlpha.900" />
         <ModalContent bg="transparent" boxShadow="none">
-          <ModalCloseButton 
-            color="white" 
-            size="lg" 
+          <ModalCloseButton
+            color="white"
+            size="lg"
             zIndex={20}
             top={4}
             right={4}
@@ -3117,8 +3515,8 @@ export default function InventoryPage() {
                       aria-label="Image précédente"
                       icon={<Icon as={MdChevronLeft} boxSize={8} />}
                       onClick={() => {
-                        const newIndex = selectedImageIndex > 0 
-                          ? selectedImageIndex - 1 
+                        const newIndex = selectedImageIndex > 0
+                          ? selectedImageIndex - 1
                           : selectedItemImages.length - 1;
                         setSelectedImageIndex(newIndex);
                       }}
@@ -3136,8 +3534,8 @@ export default function InventoryPage() {
                       aria-label="Image suivante"
                       icon={<Icon as={MdChevronRight} boxSize={8} />}
                       onClick={() => {
-                        const newIndex = selectedImageIndex < selectedItemImages.length - 1 
-                          ? selectedImageIndex + 1 
+                        const newIndex = selectedImageIndex < selectedItemImages.length - 1
+                          ? selectedImageIndex + 1
                           : 0;
                         setSelectedImageIndex(newIndex);
                       }}

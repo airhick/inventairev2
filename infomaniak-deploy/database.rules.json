@@ -1,0 +1,28 @@
+{
+  "rules": {
+    ".read": true,
+    ".write": true,
+    "items": {
+      ".indexOn": ["id", "serialNumber", "status", "category"]
+    },
+    "rentals": {
+      ".indexOn": ["id", "status", "startDate", "endDate"]
+    },
+    "notifications": {
+      ".indexOn": ["id", "created_at", "type"]
+    },
+    "customFields": {
+      ".indexOn": ["id", "fieldKey", "displayOrder"]
+    },
+    "categories": {
+      ".indexOn": ["name", "deleted"]
+    },
+    "rentalStatuses": {
+      ".indexOn": ["name"]
+    },
+    "meta": {
+      ".read": true,
+      ".write": true
+    }
+  }
+}

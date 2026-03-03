@@ -1,0 +1,36 @@
+{
+  "meta": {
+    "version": 1,
+    "createdAt": "2026-02-25T00:00:00.000Z",
+    "counters": {
+      "items": 0,
+      "rentals": 0,
+      "customFields": 0
+    }
+  },
+  "items": {},
+  "rentals": {},
+  "notifications": {},
+  "customFields": {},
+  "categories": {
+    "materiel": { "name": "materiel", "deleted": false },
+    "drone": { "name": "drone", "deleted": false },
+    "video": { "name": "video", "deleted": false },
+    "audio": { "name": "audio", "deleted": false },
+    "streaming": { "name": "streaming", "deleted": false },
+    "robot": { "name": "robot", "deleted": false },
+    "ordinateur": { "name": "ordinateur", "deleted": false },
+    "casque_vr": { "name": "casque_vr", "deleted": false },
+    "camera": { "name": "camera", "deleted": false },
+    "eclairage": { "name": "eclairage", "deleted": false },
+    "accessoire": { "name": "accessoire", "deleted": false },
+    "autre": { "name": "autre", "deleted": false }
+  },
+  "rentalStatuses": {
+    "en_cours": { "name": "en_cours", "color": "#3182ce" },
+    "a_venir": { "name": "a_venir", "color": "#805ad5" },
+    "termine": { "name": "termine", "color": "#38a169" },
+    "annule": { "name": "annule", "color": "#e53e3e" }
+  },
+  "products": {}
+}

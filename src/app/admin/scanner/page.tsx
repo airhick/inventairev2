@@ -40,7 +40,7 @@ import {
 import { useState, useRef, useEffect } from 'react';
 import { MdQrCodeScanner, MdCameraAlt, MdSearch, MdDocumentScanner, MdTextFields, MdPhotoLibrary, MdClose, MdCheckCircle, MdAutoAwesome } from 'react-icons/md';
 import Card from 'components/card/Card';
-import { saveItem, searchProductByBarcode, searchItemByCode, recognizeImage, analyzeLabelAI, OcrResult, getCategories, getCustomFields, CustomField, getSSEUrl, fetchImageAsBase64, uploadImage } from 'lib/api';
+import { saveItem, searchProductByBarcode, searchItemByCode, recognizeImage, analyzeLabelAI, OcrResult, getCategories, getCustomFields, CustomField, getSSEUrl, fetchImageAsBase64, uploadImage, Item } from 'lib/api';
 import { BrowserMultiFormatReader, NotFoundException } from '@zxing/library';
 
 export default function ScannerPage() {
@@ -64,26 +64,26 @@ export default function ScannerPage() {
   const [ocrResult, setOcrResult] = useState<OcrResult | null>(null);
   const [isOcrCameraActive, setIsOcrCameraActive] = useState(false);
   const [isAiAnalyzing, setIsAiAnalyzing] = useState(false);
-  
+
   // Champs personnalisés
   const [customFields, setCustomFields] = useState<CustomField[]>([]);
   const [customData, setCustomData] = useState<Record<string, any>>({});
-  
+
   const { isOpen: isOcrModalOpen, onOpen: onOcrModalOpen, onClose: onOcrModalClose } = useDisclosure();
   const { isOpen: isOcrCameraOpen, onOpen: onOcrCameraOpen, onClose: onOcrCameraClose } = useDisclosure();
   const { isOpen: isOcrMappingOpen, onOpen: onOcrMappingOpen, onClose: onOcrMappingClose } = useDisclosure();
-  
+
   // Mapping OCR
   const [ocrMapping, setOcrMapping] = useState<Record<string, string>>({});
   const [draggedOcrField, setDraggedOcrField] = useState<string | null>(null);
   const [editableOcrFields, setEditableOcrFields] = useState<Record<string, string>>({});
-  
+
   // Détection automatique de codes-barres
   const [detectedBarcodes, setDetectedBarcodes] = useState<any[]>([]);
   const [lastDetectedCode, setLastDetectedCode] = useState<string>('');
   const [isCameraLoading, setIsCameraLoading] = useState(false);
   const [scanDuration, setScanDuration] = useState<number>(0);
-  
+
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -96,7 +96,7 @@ export default function ScannerPage() {
   const ocrStreamRef = useRef<MediaStream | null>(null);
   const codeReaderRef = useRef<BrowserMultiFormatReader | null>(null);
   const scanAttemptsRef = useRef<number>(0);
-  
+
   const toast = useToast();
   const bg = useColorModeValue('white', 'navy.800');
   const textColor = useColorModeValue('secondaryGray.900', 'white');
@@ -106,44 +106,44 @@ export default function ScannerPage() {
   // Scanner en continu les codes-barres depuis la vidéo avec ZXing
   const scanBarcodesFromVideo = async () => {
     if (!videoRef.current || !canvasRef.current || !isScanning) return;
-    
+
     const video = videoRef.current;
     const canvas = canvasRef.current;
-    
+
     // Vérifier que la vidéo est prête
     if (video.readyState !== video.HAVE_ENOUGH_DATA) {
       scanIntervalRef.current = window.requestAnimationFrame(scanBarcodesFromVideo);
       return;
     }
-    
+
     // Ajuster le canvas à la taille de la vidéo
     const videoWidth = video.videoWidth;
     const videoHeight = video.videoHeight;
-    
+
     if (videoWidth > 0 && videoHeight > 0) {
       canvas.width = videoWidth;
       canvas.height = videoHeight;
-      
+
       const ctx = canvas.getContext('2d');
       if (!ctx) return;
-      
+
       // Toujours dessiner la vidéo en premier
       ctx.clearRect(0, 0, videoWidth, videoHeight);
       ctx.drawImage(video, 0, 0, videoWidth, videoHeight);
-      
+
       try {
         // Utiliser ZXing pour détecter les codes-barres depuis le canvas
         if (!codeReaderRef.current) {
           codeReaderRef.current = new BrowserMultiFormatReader();
           console.log('[BARCODE] Lecteur ZXing initialisé - Tous formats supportés');
         }
-        
+
         // Incrémenter le compteur de tentatives
         scanAttemptsRef.current++;
         if (scanAttemptsRef.current % 30 === 0) {
           console.log(`[BARCODE] ${scanAttemptsRef.current} tentatives de détection...`);
         }
-        
+
         // Essayer de décoder directement d'abord (plus rapide)
         let result = null;
         try {
@@ -152,11 +152,11 @@ export default function ScannerPage() {
           // Si échec, essayer avec amélioration du contraste
           const imageData = ctx.getImageData(0, 0, videoWidth, videoHeight);
           const data = imageData.data;
-          
+
           // Augmenter le contraste et la luminosité
           const contrastFactor = 1.3;
           const brightnessFactor = 20;
-          
+
           for (let i = 0; i < data.length; i += 4) {
             // Appliquer contraste et luminosité
             data[i] = Math.max(0, Math.min(255, ((data[i] - 128) * contrastFactor) + 128 + brightnessFactor));       // R
@@ -164,7 +164,7 @@ export default function ScannerPage() {
             data[i + 2] = Math.max(0, Math.min(255, ((data[i + 2] - 128) * contrastFactor) + 128 + brightnessFactor)); // B
           }
           ctx.putImageData(imageData, 0, 0);
-          
+
           // Réessayer avec l'image améliorée
           try {
             result = await codeReaderRef.current.decodeFromCanvas(canvas);
@@ -173,21 +173,21 @@ export default function ScannerPage() {
             throw e2;
           }
         }
-        
+
         // Redessiner la vidéo normale pour l'affichage
         ctx.drawImage(video, 0, 0, videoWidth, videoHeight);
-        
+
         if (result) {
           // Code-barres détecté
           const detectedCode = result.getText();
           const resultPoints = result.getResultPoints();
-          
+
           console.log('[BARCODE] ✓ Code détecté:', detectedCode, '| Points:', resultPoints?.length);
-          
+
           // Redessiner la vidéo pour effacer les anciennes détections
           ctx.clearRect(0, 0, videoWidth, videoHeight);
           ctx.drawImage(video, 0, 0, videoWidth, videoHeight);
-          
+
           if (resultPoints && resultPoints.length >= 2) {
             // Calculer la bounding box à partir des points
             const xs = resultPoints.map(p => p.getX());
@@ -196,74 +196,74 @@ export default function ScannerPage() {
             const maxX = Math.max(...xs);
             const minY = Math.min(...ys);
             const maxY = Math.max(...ys);
-            
+
             const boxWidth = maxX - minX;
             const boxHeight = maxY - minY;
-            
+
             console.log('[BARCODE] Rectangle:', { minX, minY, boxWidth, boxHeight });
-            
+
             // Dessiner un rectangle rouge TRÈS VISIBLE avec effet lumineux
             ctx.strokeStyle = '#FF0000';
             ctx.lineWidth = 8;
             ctx.shadowColor = '#FF0000';
             ctx.shadowBlur = 20;
             ctx.strokeRect(minX - 15, minY - 15, boxWidth + 30, boxHeight + 30);
-            
+
             // Dessiner les coins pour un effet plus marqué
             ctx.shadowBlur = 0;
             ctx.lineWidth = 12;
             const cornerSize = 30;
-            
+
             // Coin haut-gauche
             ctx.beginPath();
             ctx.moveTo(minX - 15, minY - 15 + cornerSize);
             ctx.lineTo(minX - 15, minY - 15);
             ctx.lineTo(minX - 15 + cornerSize, minY - 15);
             ctx.stroke();
-            
+
             // Coin haut-droit
             ctx.beginPath();
             ctx.moveTo(maxX + 15 - cornerSize, minY - 15);
             ctx.lineTo(maxX + 15, minY - 15);
             ctx.lineTo(maxX + 15, minY - 15 + cornerSize);
             ctx.stroke();
-            
+
             // Coin bas-gauche
             ctx.beginPath();
             ctx.moveTo(minX - 15, maxY + 15 - cornerSize);
             ctx.lineTo(minX - 15, maxY + 15);
             ctx.lineTo(minX - 15 + cornerSize, maxY + 15);
             ctx.stroke();
-            
+
             // Coin bas-droit
             ctx.beginPath();
             ctx.moveTo(maxX + 15 - cornerSize, maxY + 15);
             ctx.lineTo(maxX + 15, maxY + 15);
             ctx.lineTo(maxX + 15, maxY + 15 - cornerSize);
             ctx.stroke();
-            
+
             // Ajouter un fond semi-transparent pour le texte
             const textX = minX - 15;
             const textY = minY - 30;
-            
+
             ctx.font = 'bold 24px Arial';
             const textWidth = ctx.measureText(detectedCode).width;
             ctx.fillStyle = 'rgba(255, 0, 0, 0.9)';
             ctx.fillRect(textX - 8, textY - 30, textWidth + 16, 38);
-            
+
             // Afficher le texte du code-barres
             ctx.fillStyle = '#FFFFFF';
             ctx.fillText(detectedCode, textX, textY);
           }
-          
+
           setDetectedBarcodes([{ rawValue: detectedCode }]);
-          
+
           // Si un nouveau code est détecté, l'utiliser
           if (detectedCode !== lastDetectedCode) {
             console.log('[BARCODE] ✓ Nouveau code:', detectedCode);
             setLastDetectedCode(detectedCode);
             setBarcode(detectedCode);
-            
+
             toast({
               title: '✅ Code-barres détecté',
               description: `Code: ${detectedCode}`,
@@ -272,16 +272,16 @@ export default function ScannerPage() {
               isClosable: true,
               position: 'top',
             });
-            
+
             // Rechercher automatiquement
             await handleSerialNumberSearch(detectedCode);
-            
+
             // Arrêter immédiatement la détection pour éviter les doublons
             if (scanIntervalRef.current !== null) {
               window.cancelAnimationFrame(scanIntervalRef.current);
               scanIntervalRef.current = null;
             }
-            
+
             // Arrêter la caméra automatiquement après détection
             console.log('[BARCODE] Fermeture automatique de la caméra dans 1.5s...');
             setTimeout(() => {
@@ -294,7 +294,7 @@ export default function ScannerPage() {
                 isClosable: true,
               });
             }, 1500); // Délai de 1.5 secondes pour voir le rectangle rouge
-            
+
             // Ne pas continuer la boucle après détection
             return;
           }
@@ -312,7 +312,7 @@ export default function ScannerPage() {
         setDetectedBarcodes([]);
       }
     }
-    
+
     // Continuer la détection
     scanIntervalRef.current = window.requestAnimationFrame(scanBarcodesFromVideo);
   };
@@ -321,38 +321,38 @@ export default function ScannerPage() {
   const startScan = async () => {
     try {
       setIsCameraLoading(true);
-      
+
       // Détecter si on est sur mobile ou ordinateur
       const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-      
+
       // Configuration vidéo haute qualité pour meilleure détection
       const videoConstraints: MediaTrackConstraints = {
         width: { ideal: 1920, min: 1280 },
         height: { ideal: 1080, min: 720 },
-        aspectRatio: { ideal: 16/9 },
+        aspectRatio: { ideal: 16 / 9 },
         focusMode: 'continuous',
         advanced: [{ focusMode: 'continuous' }]
       };
-      
+
       // Sur mobile, utiliser la caméra arrière (environment)
       // Sur ordinateur, laisser le navigateur choisir la meilleure caméra (généralement la webcam)
       if (isMobile) {
         videoConstraints.facingMode = 'environment';
       }
-      
+
       console.log('[CAMERA] Configuration haute qualité:', videoConstraints);
-      
+
       console.log('[CAMERA] Demande d\'accès à la caméra...');
       const stream = await navigator.mediaDevices.getUserMedia({
         video: videoConstraints
       });
-      
+
       console.log('[CAMERA] ✓ Accès accordé, initialisation...');
       streamRef.current = stream;
-      
+
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
-        
+
         // Attendre que la vidéo soit chargée avant de commencer la détection
         videoRef.current.onloadedmetadata = () => {
           console.log('[CAMERA] ✓ Métadonnées chargées, démarrage lecture...');
@@ -360,32 +360,32 @@ export default function ScannerPage() {
             console.log('[CAMERA] ✓ Vidéo en cours de lecture');
             setIsScanning(true);
             setIsCameraLoading(false);
-            
+
             // Démarrer la détection automatique après un petit délai
             setTimeout(() => {
               console.log('[CAMERA] ✓ Démarrage détection codes-barres...');
               scanAttemptsRef.current = 0;
               setScanDuration(0);
               scanBarcodesFromVideo();
-              
+
               // Démarrer le compteur de durée
               const startTime = Date.now();
               const durationInterval = setInterval(() => {
                 const elapsed = Math.floor((Date.now() - startTime) / 1000);
                 setScanDuration(elapsed);
-                
+
                 // Afficher un conseil après 5 secondes sans détection
                 if (elapsed === 5 && lastDetectedCode === '') {
                   console.log('[BARCODE] ⚠️ Aucune détection après 5s - Vérifiez l\'éclairage et la distance');
                 }
-                
+
                 // Arrêter le compteur si la caméra est fermée
                 if (!isScanning) {
                   clearInterval(durationInterval);
                 }
               }, 1000);
             }, 500);
-            
+
             toast({
               title: '📷 Caméra active',
               description: 'Pointez vers un code-barres pour le scanner automatiquement',
@@ -403,10 +403,10 @@ export default function ScannerPage() {
       console.error('[CAMERA] ✗ Erreur accès caméra:', error);
       setIsCameraLoading(false);
       setIsScanning(false);
-      
+
       let errorTitle = 'Erreur d\'accès à la caméra';
       let errorDescription = 'Impossible d\'accéder à la caméra.';
-      
+
       // Détecter le type d'erreur et donner des solutions spécifiques
       if (error.name === 'NotReadableError' || error.name === 'TrackStartError') {
         errorTitle = 'Caméra déjà utilisée';
@@ -421,7 +421,7 @@ export default function ScannerPage() {
         errorTitle = 'Caméra incompatible';
         errorDescription = 'La caméra ne supporte pas la résolution demandée. Essayez avec une autre caméra.';
       }
-      
+
       toast({
         title: errorTitle,
         description: errorDescription,
@@ -443,7 +443,7 @@ export default function ScannerPage() {
       const reader = new FileReader();
       reader.onload = async (event) => {
         if (!event.target?.result) return;
-        
+
         const img = new Image();
         img.onload = async () => {
           try {
@@ -452,9 +452,9 @@ export default function ScannerPage() {
               const barcodeDetector = new (window as any).BarcodeDetector({
                 formats: ['code_128', 'code_39', 'ean_13', 'ean_8', 'qr_code', 'upc_a', 'upc_e']
               });
-              
+
               const barcodes = await barcodeDetector.detect(img);
-              
+
               if (barcodes && barcodes.length > 0) {
                 const barcodeValue = barcodes[0].rawValue;
                 setBarcode(barcodeValue);
@@ -510,7 +510,7 @@ export default function ScannerPage() {
         isClosable: true,
       });
     }
-    
+
     // Réinitialiser l'input pour permettre de sélectionner le même fichier
     if (barcodeImageInputRef.current) {
       barcodeImageInputRef.current.value = '';
@@ -520,19 +520,19 @@ export default function ScannerPage() {
   // Arrêter le scanner
   const stopScan = () => {
     console.log(`[CAMERA] Arrêt du scan après ${scanAttemptsRef.current} tentatives et ${scanDuration}s`);
-    
+
     // Arrêter la détection continue
     if (scanIntervalRef.current !== null) {
       window.cancelAnimationFrame(scanIntervalRef.current);
       scanIntervalRef.current = null;
     }
-    
+
     // Réinitialiser le code reader
     if (codeReaderRef.current) {
       codeReaderRef.current.reset();
       codeReaderRef.current = null; // Libérer la référence
     }
-    
+
     // Arrêter le stream vidéo
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(track => {
@@ -541,13 +541,13 @@ export default function ScannerPage() {
       });
       streamRef.current = null;
     }
-    
+
     // Nettoyer la vidéo
     if (videoRef.current) {
       videoRef.current.srcObject = null;
       videoRef.current.pause();
     }
-    
+
     // Nettoyer le canvas
     if (canvasRef.current) {
       const ctx = canvasRef.current.getContext('2d');
@@ -555,7 +555,7 @@ export default function ScannerPage() {
         ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
       }
     }
-    
+
     setIsScanning(false);
     setIsCameraLoading(false);
     setDetectedBarcodes([]);
@@ -567,20 +567,20 @@ export default function ScannerPage() {
   // Rechercher un produit par code-barres (API externe)
   const handleBarcodeSearch = async (barcodeValue: string) => {
     if (!barcodeValue || barcodeValue.length < 8) return;
-    
+
     try {
       const product = await searchProductByBarcode(barcodeValue);
       if (product && product.success && product.name) {
         // Pré-remplir avec les données trouvées
         setName(product.name);
-        
+
         if (product.brand) {
           setBrand(product.brand);
         }
-        
+
         // Récupérer et convertir l'image du produit si disponible
         let imageUrl: string | null = null;
-        
+
         // Différents formats possibles selon l'API
         if (product.images && Array.isArray(product.images) && product.images.length > 0) {
           imageUrl = product.images[0];
@@ -589,17 +589,17 @@ export default function ScannerPage() {
         } else if (product.imageUrl && typeof product.imageUrl === 'string') {
           imageUrl = product.imageUrl;
         }
-        
+
         if (imageUrl && imageUrl.startsWith('http')) {
           try {
             console.log('[UPC] Récupération image depuis:', imageUrl);
-            
+
             // Utiliser le proxy serveur pour éviter les problèmes CORS
             const result = await fetchImageAsBase64(imageUrl);
-            
+
             if (result.success && result.image) {
               setMedia(prev => [...prev, result.image!]);
-              
+
               toast({
                 title: '📷 Image récupérée',
                 description: 'L\'image du produit a été ajoutée',
@@ -607,7 +607,7 @@ export default function ScannerPage() {
                 duration: 2000,
                 isClosable: true,
               });
-              
+
               console.log('[UPC] ✓ Image convertie et ajoutée aux médias');
             } else {
               console.error('[UPC] Erreur récupération image:', result.error);
@@ -617,7 +617,7 @@ export default function ScannerPage() {
             // Ne pas afficher d'erreur à l'utilisateur, l'image n'est pas critique
           }
         }
-        
+
         toast({
           title: 'Produit trouvé',
           description: `"${product.name}" via ${product.source || 'API externe'}`,
@@ -650,7 +650,7 @@ export default function ScannerPage() {
     setIsSearching(true);
     try {
       const result = await searchItemByCode(searchValue);
-      
+
       if (result.found && result.item) {
         // Pré-remplir les champs avec les données trouvées
         setName(result.item.name || '');
@@ -660,7 +660,7 @@ export default function ScannerPage() {
         setBrand(result.item.brand || '');
         setModel(result.item.model || '');
         setDescription(result.item.categoryDetails || '');
-        
+
         // Si l'item a une image, l'ajouter aux médias
         let hasLocalImage = false;
         if (result.item.image) {
@@ -695,7 +695,7 @@ export default function ScannerPage() {
           duration: 3000,
           isClosable: true,
         });
-        
+
         // Si l'item n'a pas d'image locale, essayer de récupérer depuis l'API externe
         if (!hasLocalImage && searchValue.length >= 8) {
           console.log('[SEARCH] Item sans image, recherche API externe...');
@@ -709,7 +709,7 @@ export default function ScannerPage() {
           duration: 2000,
           isClosable: true,
         });
-        
+
         // Si pas trouvé localement, essayer la recherche externe
         if (searchValue.length >= 8) {
           await handleBarcodeSearch(searchValue);
@@ -753,7 +753,7 @@ export default function ScannerPage() {
   };
 
   // ==================== OCR ====================
-  
+
   // Sélectionner une image pour l'OCR
   const handleOcrImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -790,19 +790,19 @@ export default function ScannerPage() {
   // Capturer l'image depuis la caméra OCR
   const captureOcrPhoto = () => {
     if (!ocrVideoRef.current) return;
-    
+
     const video = ocrVideoRef.current;
     const canvas = document.createElement('canvas');
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
     const ctx = canvas.getContext('2d');
     ctx?.drawImage(video, 0, 0);
-    
+
     // Convertir en base64
     const imageData = canvas.toDataURL('image/jpeg', 0.9);
     setOcrImage(imageData);
     setOcrResult(null);
-    
+
     // Arrêter la caméra et ouvrir le modal de résultats
     stopOcrCamera();
     onOcrModalOpen();
@@ -815,10 +815,10 @@ export default function ScannerPage() {
     try {
       console.log('[AI-Label] Début analyse IA...');
       const result = await analyzeLabelAI(imageData);
-      
+
       if (result.success && result.parsed) {
         console.log('[AI-Label] Données extraites:', result.parsed);
-        
+
         // Remplir automatiquement les champs du formulaire standard
         if (result.parsed.name) setName(result.parsed.name);
         if (result.parsed.serialNumber) setSerialNumber(result.parsed.serialNumber);
@@ -828,12 +828,12 @@ export default function ScannerPage() {
         if (result.parsed.description) setDescription(result.parsed.description);
         if (result.parsed.category) setCategory(result.parsed.category);
         if (result.parsed.quantity) setQuantity(result.parsed.quantity);
-        
+
         // Remplir les champs personnalisés
         if (result.customFields && result.customFields.length > 0) {
           const newCustomData: Record<string, any> = { ...customData };
           let customFieldsFilledCount = 0;
-          
+
           result.customFields.forEach((field: any) => {
             const fieldKey = field.fieldKey;
             if (result.parsed[fieldKey] !== undefined && result.parsed[fieldKey] !== null) {
@@ -842,24 +842,24 @@ export default function ScannerPage() {
               console.log(`[AI-Label] Champ personnalisé rempli: ${field.name} = ${result.parsed[fieldKey]}`);
             }
           });
-          
+
           if (customFieldsFilledCount > 0) {
             setCustomData(newCustomData);
             console.log(`[AI-Label] ${customFieldsFilledCount} champs personnalisés remplis`);
           }
         }
-        
+
         // Ajouter l'image aux médias si pas déjà présente
         if (!media.includes(imageData)) {
           setMedia(prev => [...prev, imageData]);
         }
-        
+
         // Préparer le message de succès
         let successMessage = 'Champs remplis automatiquement';
         if (result.parsed.barcode && result.parsed.name) {
           successMessage += ` (UPC: ${result.parsed.barcode})`;
         }
-        
+
         toast({
           title: '✨ Analyse IA réussie!',
           description: successMessage,
@@ -889,12 +889,12 @@ export default function ScannerPage() {
       setIsAiAnalyzing(false);
     }
   };
-  
+
   // Handler pour l'upload d'image pour analyse IA
   const handleAiImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    
+
     const reader = new FileReader();
     reader.onload = (event) => {
       const imageData = event.target?.result as string;
@@ -960,71 +960,71 @@ export default function ScannerPage() {
   // Extraire les champs OCR disponibles (avec valeurs éditables)
   const getOcrFields = (): Array<{ key: string; label: string; value: string }> => {
     if (!ocrResult) return [];
-    
+
     const fields: Array<{ key: string; label: string; value: string }> = [];
-    
+
     // Ajouter les champs parsés
     if (ocrResult.parsed) {
       if (ocrResult.parsed.name) {
         const key = 'name';
-        fields.push({ 
-          key, 
-          label: 'Nom', 
-          value: editableOcrFields[key] !== undefined ? editableOcrFields[key] : ocrResult.parsed.name 
+        fields.push({
+          key,
+          label: 'Nom',
+          value: editableOcrFields[key] !== undefined ? editableOcrFields[key] : ocrResult.parsed.name
         });
       }
       if (ocrResult.parsed.serialNumber) {
         const key = 'serialNumber';
-        fields.push({ 
-          key, 
-          label: 'N° Série', 
-          value: editableOcrFields[key] !== undefined ? editableOcrFields[key] : ocrResult.parsed.serialNumber 
+        fields.push({
+          key,
+          label: 'N° Série',
+          value: editableOcrFields[key] !== undefined ? editableOcrFields[key] : ocrResult.parsed.serialNumber
         });
       }
       if (ocrResult.parsed.brand) {
         const key = 'brand';
-        fields.push({ 
-          key, 
-          label: 'Marque', 
-          value: editableOcrFields[key] !== undefined ? editableOcrFields[key] : ocrResult.parsed.brand 
+        fields.push({
+          key,
+          label: 'Marque',
+          value: editableOcrFields[key] !== undefined ? editableOcrFields[key] : ocrResult.parsed.brand
         });
       }
       if (ocrResult.parsed.model) {
         const key = 'model';
-        fields.push({ 
-          key, 
-          label: 'Modèle', 
-          value: editableOcrFields[key] !== undefined ? editableOcrFields[key] : ocrResult.parsed.model 
+        fields.push({
+          key,
+          label: 'Modèle',
+          value: editableOcrFields[key] !== undefined ? editableOcrFields[key] : ocrResult.parsed.model
         });
       }
       if (ocrResult.parsed.barcode) {
         const key = 'barcode';
-        fields.push({ 
-          key, 
-          label: 'Code-barres', 
-          value: editableOcrFields[key] !== undefined ? editableOcrFields[key] : ocrResult.parsed.barcode 
+        fields.push({
+          key,
+          label: 'Code-barres',
+          value: editableOcrFields[key] !== undefined ? editableOcrFields[key] : ocrResult.parsed.barcode
         });
       }
       if (ocrResult.parsed.description) {
         const key = 'description';
-        fields.push({ 
-          key, 
-          label: 'Description', 
-          value: editableOcrFields[key] !== undefined ? editableOcrFields[key] : ocrResult.parsed.description 
+        fields.push({
+          key,
+          label: 'Description',
+          value: editableOcrFields[key] !== undefined ? editableOcrFields[key] : ocrResult.parsed.description
         });
       }
     }
-    
+
     // Ajouter le texte brut comme option supplémentaire
     if (ocrResult.rawText && ocrResult.rawText.trim()) {
       const key = 'rawText';
-      fields.push({ 
-        key, 
-        label: 'Texte brut', 
-        value: editableOcrFields[key] !== undefined ? editableOcrFields[key] : ocrResult.rawText 
+      fields.push({
+        key,
+        label: 'Texte brut',
+        value: editableOcrFields[key] !== undefined ? editableOcrFields[key] : ocrResult.rawText
       });
     }
-    
+
     return fields;
   };
 
@@ -1064,10 +1064,10 @@ export default function ScannerPage() {
   // Auto-mapping intelligent basé sur les noms de champs
   const autoMapOcrFields = () => {
     if (!ocrResult) return;
-    
+
     const autoMapping: Record<string, string> = {};
     const ocrFields = getOcrFields();
-    
+
     ocrFields.forEach(field => {
       const fieldKey = field.key.toLowerCase();
       if (fieldKey === 'name') autoMapping[field.key] = 'name';
@@ -1077,14 +1077,14 @@ export default function ScannerPage() {
       else if (fieldKey.includes('model') || fieldKey.includes('modele')) autoMapping[field.key] = 'model';
       else if (fieldKey.includes('description') || fieldKey.includes('desc')) autoMapping[field.key] = 'description';
     });
-    
+
     setOcrMapping(autoMapping);
   };
 
   // Ouvrir la modal de mapping
   const openOcrMapping = () => {
     if (!ocrResult?.success) return;
-    
+
     // Auto-mapping initial
     autoMapOcrFields();
     onOcrMappingOpen();
@@ -1096,7 +1096,7 @@ export default function ScannerPage() {
 
     const ocrFields = getOcrFields();
     const mappedFields = Object.values(ocrMapping);
-    
+
     if (mappedFields.filter(f => f).length === 0) {
       toast({
         title: 'Aucun mapping',
@@ -1111,12 +1111,12 @@ export default function ScannerPage() {
     // Appliquer les valeurs mappées
     Object.entries(ocrMapping).forEach(([ocrFieldKey, inventoryField]) => {
       if (!inventoryField) return;
-      
+
       const ocrField = ocrFields.find(f => f.key === ocrFieldKey);
       if (!ocrField) return;
-      
+
       const value = ocrField.value;
-      
+
       // Mapper aux champs du formulaire
       switch (inventoryField) {
         case 'name':
@@ -1228,22 +1228,32 @@ export default function ScannerPage() {
         // blob: URLs sont ignorées ici car déjà uploadées via mediaFiles
       }
 
-      // 2. Créer un item pour chaque unité
+      // 2. Créer un item pour chaque unité (le 1er est le parent, les suivants sont des sous-items)
+      let parentItemId: number | null = null;
       for (let i = 0; i < quantity; i++) {
-        const itemData = {
-          scannedCode: barcode.trim() || null,
+        const itemData: Partial<Item> = {
+          scannedCode: barcode.trim() || undefined,
           serialNumber: i === 0 ? itemSerialNumber : `${itemSerialNumber}-${i}`,
           name: name.trim(),
           category: category,
-          brand: brand.trim() || null,
-          model: model.trim() || null,
+          brand: brand.trim() || undefined,
+          model: model.trim() || undefined,
           quantity: 1,
           categoryDetails: description.trim() || '',
-          image: imagePaths.length > 0 ? JSON.stringify(imagePaths) : null,
+          image: imagePaths.length > 0 ? JSON.stringify(imagePaths) : undefined,
           customData: Object.keys(customData).length > 0 ? customData : undefined,
+          // Le 1er est parent (parentId=null), les suivants sont des sous-items
+          parentId: parentItemId,
+          displayOrder: i,
         };
 
-        await saveItem(itemData);
+        const result = await saveItem(itemData);
+
+        // Mémoriser l'id du 1er item pour en faire le parent des suivants
+        if (i === 0 && quantity > 1) {
+          parentItemId = result.id;
+          console.log(`[SCANNER] Item principal créé (id=${result.id}), les ${quantity - 1} suivants seront des sous-items`);
+        }
       }
 
       toast({
@@ -1307,7 +1317,7 @@ export default function ScannerPage() {
         setCategories(['materiel', 'drone', 'video', 'audio', 'streaming', 'robot', 'ordinateur', 'casque_vr', 'camera', 'eclairage', 'accessoire', 'autre']);
       }
     };
-    
+
     const loadCustomFieldsData = async () => {
       try {
         const data = await getCustomFields();
@@ -1317,51 +1327,58 @@ export default function ScannerPage() {
         setCustomFields([]);
       }
     };
-    
+
     // Chargement initial
     loadCategoriesData();
     loadCustomFieldsData();
-    
+    if (!SSE_URL) {
+      const pollingInterval = setInterval(() => {
+        loadCategoriesData();
+        loadCustomFieldsData();
+      }, 5000);
+      return () => clearInterval(pollingInterval);
+    }
+
     // Écouter les événements SSE pour recharger uniquement lors de changements
     let eventSource: EventSource | null = null;
     let reconnectTimeout: NodeJS.Timeout | null = null;
     let reconnectAttempts = 0;
     const maxReconnectAttempts = 5;
-    
+
     const connectSSE = () => {
       if (eventSource) {
         eventSource.close();
       }
-      
+
       eventSource = new EventSource(SSE_URL);
-      
+
       eventSource.onopen = () => {
         console.log('[SSE] Connecté aux événements temps réel');
         reconnectAttempts = 0;
       };
-      
+
       eventSource.onerror = () => {
         console.log('[SSE] Erreur de connexion, tentative de reconnexion...');
         eventSource?.close();
-        
+
         if (reconnectAttempts < maxReconnectAttempts) {
           reconnectAttempts++;
           const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
           reconnectTimeout = setTimeout(connectSSE, delay);
         }
       };
-      
+
       eventSource.addEventListener('categories_changed', () => {
         loadCategoriesData();
       });
-      
+
       eventSource.addEventListener('custom_fields_changed', () => {
         loadCustomFieldsData();
       });
     };
-    
+
     connectSSE();
-    
+
     return () => {
       eventSource?.close();
       if (reconnectTimeout) clearTimeout(reconnectTimeout);
@@ -1379,7 +1396,7 @@ export default function ScannerPage() {
         });
       }
     }
-    
+
     // Nettoyer quand le modal se ferme
     return () => {
       if (!isOcrCameraOpen && ocrStreamRef.current) {
@@ -1454,7 +1471,7 @@ export default function ScannerPage() {
               >
                 {isCameraLoading ? '⏳ Initialisation de la caméra...' : '📷 Scanner en direct - Positionnez un code-barres devant la caméra'}
               </Box>
-              
+
               {/* Spinner de chargement */}
               {isCameraLoading && (
                 <Flex
@@ -1479,15 +1496,15 @@ export default function ScannerPage() {
                   </VStack>
                 </Flex>
               )}
-              
+
               {/* Vidéo en arrière-plan */}
               <video
                 ref={videoRef}
                 autoPlay
                 playsInline
                 muted
-                style={{ 
-                  width: '100%', 
+                style={{
+                  width: '100%',
                   height: 'auto',
                   minHeight: '400px',
                   maxHeight: '600px',
@@ -1496,7 +1513,7 @@ export default function ScannerPage() {
                   backgroundColor: '#000'
                 }}
               />
-              
+
               {/* Canvas overlay pour afficher les détections */}
               <canvas
                 ref={canvasRef}
@@ -1510,7 +1527,7 @@ export default function ScannerPage() {
                   zIndex: 2
                 }}
               />
-              
+
               {/* Indicateur de détection ou durée */}
               {detectedBarcodes.length > 0 ? (
                 <Box
@@ -1558,7 +1575,7 @@ export default function ScannerPage() {
                   )}
                 </Box>
               )}
-              
+
               {/* Instructions permanentes */}
               {detectedBarcodes.length === 0 && !isCameraLoading && (
                 <Box
@@ -1594,7 +1611,7 @@ export default function ScannerPage() {
                   </VStack>
                 </Box>
               )}
-              
+
               {/* Indicateur de scan actif (coins animés) */}
               {!isCameraLoading && detectedBarcodes.length === 0 && (
                 <Box
@@ -1797,99 +1814,99 @@ export default function ScannerPage() {
                       .map((field) => {
                         const fieldKey = field.fieldKey;
                         const value = customData[fieldKey] || '';
-                        
+
                         return (
                           <FormControl key={field.id} isRequired={field.required} w="100%">
-                          <FormLabel>
-                            {field.name}
-                            {field.required && <Text as="span" color="red.500"> *</Text>}
-                          </FormLabel>
-                          {field.fieldType === 'text' && (
-                            <Input
-                              value={value}
-                              onChange={(e) =>
-                                setCustomData({ ...customData, [fieldKey]: e.target.value })
-                              }
-                              placeholder={`Saisir ${field.name.toLowerCase()}`}
-                            />
-                          )}
-                          {field.fieldType === 'textarea' && (
-                            <Textarea
-                              value={value}
-                              onChange={(e) =>
-                                setCustomData({ ...customData, [fieldKey]: e.target.value })
-                              }
-                              placeholder={`Saisir ${field.name.toLowerCase()}`}
-                              rows={3}
-                            />
-                          )}
-                          {field.fieldType === 'number' && (
-                            <Input
-                              type="number"
-                              value={value}
-                              onChange={(e) =>
-                                setCustomData({ ...customData, [fieldKey]: e.target.value })
-                              }
-                              placeholder={`Saisir ${field.name.toLowerCase()}`}
-                            />
-                          )}
-                          {field.fieldType === 'date' && (
-                            <Input
-                              type="date"
-                              value={value}
-                              onChange={(e) =>
-                                setCustomData({ ...customData, [fieldKey]: e.target.value })
-                              }
-                            />
-                          )}
-                          {field.fieldType === 'select' && (
-                            <Select
-                              value={value}
-                              onChange={(e) =>
-                                setCustomData({ ...customData, [fieldKey]: e.target.value })
-                              }
-                              placeholder={`Sélectionner ${field.name.toLowerCase()}`}
-                            >
-                              {field.options?.map((option, idx) => (
-                                <option key={idx} value={option}>
-                                  {option}
-                                </option>
-                              ))}
-                            </Select>
-                          )}
-                          {field.fieldType === 'checkbox' && (
-                            <Checkbox
-                              isChecked={value === true || value === 'true'}
-                              onChange={(e) =>
-                                setCustomData({ ...customData, [fieldKey]: e.target.checked })
-                              }
-                            >
+                            <FormLabel>
                               {field.name}
-                            </Checkbox>
-                          )}
-                          {field.fieldType === 'url' && (
-                            <Input
-                              type="url"
-                              value={value}
-                              onChange={(e) =>
-                                setCustomData({ ...customData, [fieldKey]: e.target.value })
-                              }
-                              placeholder="https://..."
-                            />
-                          )}
-                          {field.fieldType === 'email' && (
-                            <Input
-                              type="email"
-                              value={value}
-                              onChange={(e) =>
-                                setCustomData({ ...customData, [fieldKey]: e.target.value })
-                              }
-                              placeholder="email@example.com"
-                            />
-                          )}
-                        </FormControl>
-                      );
-                    })}
+                              {field.required && <Text as="span" color="red.500"> *</Text>}
+                            </FormLabel>
+                            {field.fieldType === 'text' && (
+                              <Input
+                                value={value}
+                                onChange={(e) =>
+                                  setCustomData({ ...customData, [fieldKey]: e.target.value })
+                                }
+                                placeholder={`Saisir ${field.name.toLowerCase()}`}
+                              />
+                            )}
+                            {field.fieldType === 'textarea' && (
+                              <Textarea
+                                value={value}
+                                onChange={(e) =>
+                                  setCustomData({ ...customData, [fieldKey]: e.target.value })
+                                }
+                                placeholder={`Saisir ${field.name.toLowerCase()}`}
+                                rows={3}
+                              />
+                            )}
+                            {field.fieldType === 'number' && (
+                              <Input
+                                type="number"
+                                value={value}
+                                onChange={(e) =>
+                                  setCustomData({ ...customData, [fieldKey]: e.target.value })
+                                }
+                                placeholder={`Saisir ${field.name.toLowerCase()}`}
+                              />
+                            )}
+                            {field.fieldType === 'date' && (
+                              <Input
+                                type="date"
+                                value={value}
+                                onChange={(e) =>
+                                  setCustomData({ ...customData, [fieldKey]: e.target.value })
+                                }
+                              />
+                            )}
+                            {field.fieldType === 'select' && (
+                              <Select
+                                value={value}
+                                onChange={(e) =>
+                                  setCustomData({ ...customData, [fieldKey]: e.target.value })
+                                }
+                                placeholder={`Sélectionner ${field.name.toLowerCase()}`}
+                              >
+                                {field.options?.map((option, idx) => (
+                                  <option key={idx} value={option}>
+                                    {option}
+                                  </option>
+                                ))}
+                              </Select>
+                            )}
+                            {field.fieldType === 'checkbox' && (
+                              <Checkbox
+                                isChecked={value === true || value === 'true'}
+                                onChange={(e) =>
+                                  setCustomData({ ...customData, [fieldKey]: e.target.checked })
+                                }
+                              >
+                                {field.name}
+                              </Checkbox>
+                            )}
+                            {field.fieldType === 'url' && (
+                              <Input
+                                type="url"
+                                value={value}
+                                onChange={(e) =>
+                                  setCustomData({ ...customData, [fieldKey]: e.target.value })
+                                }
+                                placeholder="https://..."
+                              />
+                            )}
+                            {field.fieldType === 'email' && (
+                              <Input
+                                type="email"
+                                value={value}
+                                onChange={(e) =>
+                                  setCustomData({ ...customData, [fieldKey]: e.target.value })
+                                }
+                                placeholder="email@example.com"
+                              />
+                            )}
+                          </FormControl>
+                        );
+                      })}
                   </VStack>
                   <Divider mt={4} />
                 </Box>
@@ -1957,7 +1974,7 @@ export default function ScannerPage() {
               {ocrResult && ocrResult.success && (
                 <Box>
                   <Text fontWeight="bold" mb={2}>Données détectées :</Text>
-                  
+
                   <VStack spacing={2} align="stretch">
                     {ocrResult.parsed?.name && (
                       <HStack>
@@ -1998,7 +2015,7 @@ export default function ScannerPage() {
                   </VStack>
 
                   <Divider my={3} />
-                  
+
                   <Text fontWeight="bold" mb={2}>Texte brut détecté :</Text>
                   <Box
                     bg="gray.50"
@@ -2088,15 +2105,15 @@ export default function ScannerPage() {
                     </Text>
                   </VStack>
                 )}
-                
+
                 <video
                   ref={ocrVideoRef}
                   autoPlay
                   playsInline
                   muted
                   controls={false}
-                  style={{ 
-                    width: '100%', 
+                  style={{
+                    width: '100%',
                     height: 'auto',
                     maxHeight: '400px',
                     minHeight: '300px',
@@ -2111,7 +2128,7 @@ export default function ScannerPage() {
                     }
                   }}
                 />
-                
+
                 {/* Cadre de visée */}
                 {isOcrCameraActive && (
                   <Box
@@ -2149,9 +2166,9 @@ export default function ScannerPage() {
       </Modal>
 
       {/* Modal Mapping OCR */}
-      <Modal 
-        isOpen={isOcrMappingOpen} 
-        onClose={onOcrMappingClose} 
+      <Modal
+        isOpen={isOcrMappingOpen}
+        onClose={onOcrMappingClose}
         size={{ base: 'full', md: '4xl' }}
         scrollBehavior="inside"
       >
@@ -2181,7 +2198,7 @@ export default function ScannerPage() {
               {/* Mapping avec Drag & Drop (masqué sur mobile) */}
               <Box display={{ base: 'none', md: 'block' }}>
                 <Text fontWeight="bold" mb={3}>Correspondance des champs (Glissez-déposez) :</Text>
-                
+
                 <Flex gap={4} direction={{ base: 'column', md: 'row' }}>
                   {/* Champs OCR (Source - Draggable) */}
                   <Box flex={1} minW="300px">
@@ -2243,7 +2260,7 @@ export default function ScannerPage() {
                           key => ocrMapping[key] === col.key
                         );
                         const ocrField = ocrFieldKey ? getOcrFields().find(f => f.key === ocrFieldKey) : null;
-                        
+
                         return (
                           <Box
                             key={col.key}
@@ -2302,11 +2319,11 @@ export default function ScannerPage() {
                 </Text>
                 <VStack spacing={3} align="stretch">
                   {getOcrFields().map((field) => (
-                    <Box 
-                      key={field.key} 
-                      p={3} 
-                      bg="white" 
-                      borderRadius="md" 
+                    <Box
+                      key={field.key}
+                      p={3}
+                      bg="white"
+                      borderRadius="md"
                       border="1px solid"
                       borderColor="gray.200"
                       _hover={{ borderColor: 'purple.300', shadow: 'sm' }}
@@ -2322,7 +2339,7 @@ export default function ScannerPage() {
                             </Badge>
                           )}
                         </HStack>
-                        
+
                         {/* Input éditable pour le texte OCR */}
                         {field.key === 'description' || field.key === 'rawText' ? (
                           <Textarea
@@ -2348,7 +2365,7 @@ export default function ScannerPage() {
                             _focus={{ borderColor: 'purple.400', bg: 'white' }}
                           />
                         )}
-                        
+
                         {/* Select pour choisir la colonne de destination */}
                         <Select
                           size="sm"
@@ -2383,24 +2400,24 @@ export default function ScannerPage() {
             </VStack>
           </ModalBody>
           <ModalFooter flexWrap="wrap" gap={2}>
-            <Button 
-              variant="ghost" 
+            <Button
+              variant="ghost"
               onClick={onOcrMappingClose}
               size={{ base: 'sm', md: 'md' }}
               flex={{ base: '1', md: 'initial' }}
             >
               Annuler
             </Button>
-            <Button 
-              variant="outline" 
+            <Button
+              variant="outline"
               onClick={autoMapOcrFields}
               size={{ base: 'sm', md: 'md' }}
               flex={{ base: '1', md: 'initial' }}
             >
               Auto-mapping
             </Button>
-            <Button 
-              colorScheme="brand" 
+            <Button
+              colorScheme="brand"
               onClick={applyOcrMapping}
               size={{ base: 'sm', md: 'md' }}
               flex={{ base: '1', md: 'initial' }}
